@@ -813,9 +813,20 @@ dc = doi_chieu(rpeaks, ref, fs, dung_sai) if ref is not None and len(ref) else N
 # ----------------------------------------------------------------------------
 # 7. HIỂN THỊ KẾT QUẢ
 # ----------------------------------------------------------------------------
-if not ((50 <= hr_mean <= 240) if thai_nhi else (35 <= hr_mean <= 200)):
-    st.warning(f"Nhịp tim tính ra {hr_mean:.0f} l/p là bất thường về mặt sinh lý. "
-               "Nhiều khả năng **tần số lấy mẫu đang nhập chưa đúng**, hãy kiểm tra lại.")
+fs_chua_ro = col_time is None            # file không ghi tần số lấy mẫu, người dùng phải tự nhập
+ngoai_sinh_ly = not ((50 <= hr_mean <= 240) if thai_nhi else (35 <= hr_mean <= 200))
+dang_ngo = fs_chua_ro and not ((100 <= hr_mean <= 180) if thai_nhi else (45 <= hr_mean <= 120))
+if ngoai_sinh_ly or dang_ngo:
+    st.warning(
+        f"**Nhịp tim {hr_mean:.0f} l/p {'cao' if hr_mean > 100 else 'thấp'} bất thường, hãy kiểm tra tần số lấy mẫu.** "
+        + (f"File không ghi tần số lấy mẫu nên app đang dùng **{fs} Hz** như bạn nhập (mặc định 500 Hz). "
+           "Nếu con số này khác tần số thật của máy đo, nhịp tim và mọi khoảng thời gian đều sai theo cùng tỷ lệ."
+           if fs_chua_ro else "Tần số lấy mẫu đang dùng có thể chưa đúng."))
+    if fs_chua_ro:
+        cac_fs = [f for f in (125, 200, 250, 256, 360, 500, 1000) if f != fs]
+        st.caption("Ước tính nhịp tim nếu tần số lấy mẫu thật là: "
+                   + " · ".join(f"{f} Hz ≈ {hr_mean * f / fs:.0f} l/p" for f in cac_fs)
+                   + ". Hãy xem cấu hình máy đo (ví dụ chu kỳ đọc ADC trong code Arduino) để biết con số đúng.")
 if don_vi.startswith("ADC 12-bit"):
     st.caption("Biên độ mV được quy đổi từ giá trị ADC theo giả định AD8232 (3,3 V, khuếch đại 1100), "
                "chỉ mang tính ước lượng.")
