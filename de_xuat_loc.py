@@ -18,6 +18,8 @@ from __future__ import annotations
 import numpy as np
 from scipy import signal as ss
 
+from i18n import t
+
 _tp = getattr(np, "trapezoid", None) or np.trapz
 TRONG_SO = {"sqi": 0.35, "rr": 0.25, "hinh_dang": 0.25, "khu_nhieu": 0.15}
 
@@ -62,28 +64,30 @@ def cau_hinh_tu_dong(pho: dict, fs: float, thai_nhi: bool) -> tuple[dict, list[s
     # Dải thông: ECG thai nhi có QRS hẹp, nhiều năng lượng tần cao hơn người lớn
     hi = min(70.0 if thai_nhi else 40.0, round(0.45 * fs))
     lo = 1.0 if thai_nhi else 0.5
-    ly_do.append(f"Giữ dải {lo:g}–{hi:g} Hz: " + ("phức bộ QRS của thai nhi hẹp, cần giữ thêm tần số cao."
-                                                   if thai_nhi else "dải chuẩn khi theo dõi điện tim người lớn."))
+    ly_do.append(t("Giữ dải {lo}–{hi} Hz: ", lo=f"{lo:g}", hi=f"{hi:g}")
+                 + (t("phức bộ QRS của thai nhi hẹp, cần giữ thêm tần số cao.")
+                    if thai_nhi else t("dải chuẩn khi theo dõi điện tim người lớn.")))
 
     nen = "Wavelet (bỏ thành phần xấp xỉ)" if pho["nen"] > 0.3 else "Butterworth thông cao"
-    ly_do.append((f"Đường nền trôi nhiều ({pho['nen']*100:.0f}% năng lượng tín hiệu) → làm phẳng bằng wavelet."
-                  if nen.startswith("Wavelet") else
-                  f"Đường nền trôi ít ({pho['nen']*100:.0f}% năng lượng tín hiệu) → bộ lọc thông thường là đủ."))
+    ly_do.append(t("Đường nền trôi nhiều ({p}% năng lượng tín hiệu) → làm phẳng bằng wavelet."
+                   if nen.startswith("Wavelet") else
+                   "Đường nền trôi ít ({p}% năng lượng tín hiệu) → bộ lọc thông thường là đủ.",
+                   p=f"{pho['nen']*100:.0f}"))
 
     notch = pho["do_noi_luoi"] > 3 and pho["f_luoi"] < 0.99 * nyq
     hai = notch and pho["hai_luoi"] > 3
     if notch:
-        ly_do.append(f"Có nhiễu điện lưới {pho['f_luoi']} Hz rõ rệt → bật lọc nhiễu điện"
-                     + (" (cả bội số 100, 150 Hz)." if hai else "."))
+        ly_do.append(t("Có nhiễu điện lưới {f} Hz rõ rệt → bật lọc nhiễu điện", f=pho["f_luoi"])
+                     + (t(" (cả bội số 100, 150 Hz).") if hai else "."))
     else:
-        ly_do.append("Không thấy nhiễu điện lưới → không cần lọc 50 Hz, tránh cắt bớt tín hiệu.")
+        ly_do.append(t("Không thấy nhiễu điện lưới → không cần lọc 50 Hz, tránh cắt bớt tín hiệu."))
 
     wl_on = pho["tan_cao"] > 0.02
     # Mức wavelet sâu nhất vẫn nằm trên ~8 Hz để không xoá sóng P/T
     muc = int(np.clip(np.floor(np.log2(fs / 8)) - 1, 1, 6))
-    ly_do.append((f"Có nhiễu cơ, nhiễu lăn tăn ({pho['tan_cao']*100:.1f}%) → bật làm mịn wavelet mức {muc}."
-                  if wl_on else
-                  f"Ít nhiễu cơ ({pho['tan_cao']*100:.1f}%) → không cần làm mịn."))
+    ly_do.append(t("Có nhiễu cơ, nhiễu lăn tăn ({p}%) → bật làm mịn wavelet mức {m}."
+                   if wl_on else "Ít nhiễu cơ ({p}%) → không cần làm mịn.",
+                   p=f"{pho['tan_cao']*100:.1f}", m=muc))
 
     cfg = dict(bac=4, lo=float(lo), hi=float(hi), nen=nen, notch=bool(notch), f_notch=int(pho["f_luoi"]),
                Q=30.0, hai=bool(hai), wl_on=bool(wl_on), wavelet="sym8", muc=muc,
@@ -197,14 +201,14 @@ def de_xuat(x, fs, thai_nhi, xu_ly_ecg, pp_tuy_chinh, ref=None, dung_sai_ms=50, 
 def nhan_xet_phuong_phap(r: dict) -> str:
     """Nhận xét ngắn, dễ hiểu vì sao một cách lọc được hoặc không được đề xuất."""
     if "loi" in r:
-        return "Không chạy được trên file này."
+        return t("Không chạy được trên file này.")
     yeu = []
     if r["hinh_dang"] < 0.8:
-        yeu.append("làm mất sóng P/T")
+        yeu.append(t("làm mất sóng P/T"))
     if r["rr"] < 0.9:
-        yeu.append("bỏ sót hoặc bắt nhầm một số nhịp")
+        yeu.append(t("bỏ sót hoặc bắt nhầm một số nhịp"))
     if r["sqi"] < 0.6:
-        yeu.append("các nhịp sau lọc không đồng đều")
+        yeu.append(t("các nhịp sau lọc không đồng đều"))
     if r["khu_nhieu"] < 0.7:
-        yeu.append("còn nhiều nhiễu")
-    return ("Lưu ý: " + ", ".join(yeu) + ".") if yeu else "Tốt: sạch nhiễu mà vẫn giữ hình dạng sóng."
+        yeu.append(t("còn nhiều nhiễu"))
+    return (t("Lưu ý: ") + ", ".join(yeu) + ".") if yeu else t("Tốt: sạch nhiễu mà vẫn giữ hình dạng sóng.")

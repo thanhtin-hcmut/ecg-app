@@ -2,938 +2,559 @@
 App phân tích tín hiệu ECG - Lab Tin học Vật lý Kỹ thuật
 Chạy:  streamlit run app.py
 """
-import io
+import html
+import sys
 from datetime import datetime
+from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_pdf import PdfPages
 import neurokit2 as nk
 import numpy as np
 import pandas as pd
 import streamlit as st
 
-import sys
-from pathlib import Path
-
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from de_xuat_loc import de_xuat, nhan_xet_phuong_phap
-from so_sanh_chi_so import (bien_thien_nhip_thai, danh_gia_chi_so, diem_luu_y, fig_khoang_tham_chieu,
-                            fig_shap, khoang_str, so)
-from doc_physionet import doc_edf, doc_nhan_wfdb, doc_wfdb
+from i18n import t
+from xu_ly import (DS_DON_VI, DS_KIEU_NGUONG, DS_NEN, DS_NGUONG, DS_PHUONG_PHAP,
+                   DS_UOC_LUONG, DS_WAVELET, DUOI_HO_TRO, GIOI_THIEU_PP, KHONG_CHON, MAC_DINH_LOC, PP_TUY_CHINH,
+                   TEN_KIEU, TEN_NEN, TEN_NGUONG, TEN_PP, TEN_UOC, THIET_BI, cfg_sang_session, cfg_tu_session,
+                   chi_so_don_vi_mac_dinh, doc_nhieu_file, doi_chieu, doi_don_vi, fmt, mo_ta_loc, nguong_nhip,
+                   ten_phuong_an, tinh_hrv, tinh_khoang_song, xu_ly_ecg)
+from bieu_do import (fig_dai_song, fig_dap_ung, fig_nhip_tim, fig_pho, fig_rr, fig_truoc_sau_loc, plotly_dai_song,
+                     svg_sparkline, tao_pdf)
+from de_xuat_loc import cau_hinh_tu_dong, de_xuat, nhan_xet_phuong_phap
+from so_sanh_chi_so import (MAU, bien_thien_nhip_thai, danh_gia_chi_so, diem_luu_y, fig_khoang_tham_chieu, fig_shap,
+                            khoang_str, so)
+
+st.set_page_config(page_title="ECG", page_icon="🫀", layout="wide")
+ss = st.session_state
+ss.setdefault("lang", "vi")
+ss.setdefault("chuyen_gia", False)
+for k, v in MAC_DINH_LOC.items():
+    ss.setdefault(k, v)
+# Ghi lại giá trị các ô nhập ở đầu mỗi lần chạy: giữ giá trị khi ô đang ẩn (chế độ chuyên gia tắt) và khi đổi
+# ngôn ngữ (nhãn đổi thì Streamlit coi là ô mới và sẽ trả về giá trị mặc định nếu không làm bước này).
+GIU = list(MAC_DINH_LOC) + ["chuyen_gia", "nguon", "ten_bn", "tuoi", "gioi", "col_ecg", "thiet_bi", "fs_nhap",
+                            "don_vi", "doi_tuong", "dung_sai", "t_start", "hien_s", "i_chon"]
+for k in GIU:
+    if k in ss:
+        ss[k] = ss[k]
 
 # ----------------------------------------------------------------------------
-# Cấu hình trang
+# Giao diện "phiếu lâm sàng"
 # ----------------------------------------------------------------------------
-st.set_page_config(page_title="Phân tích ECG", page_icon="🫀", layout="wide")
-st.title("🫀 Ứng dụng phân tích tín hiệu ECG")
-st.caption("Lab Tin học Vật lý Kỹ thuật · Kết quả chỉ dùng cho học tập/nghiên cứu, không dùng để chẩn đoán.")
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap');
+html, body, .stApp, .stMarkdown, p, li, label, h1, h2, h3, h4, input, textarea, button, td, th,
+[data-testid="stMetricValue"], [data-testid="stMetricLabel"], [data-baseweb="tab"], [data-baseweb="select"] div {
+  font-family: 'Be Vietnam Pro', 'Segoe UI', sans-serif; }
+.block-container { padding-top: 1.4rem; max-width: 1360px; }
+[data-testid="stSidebar"] { background: #f2f6f8; border-right: 1px solid #dbe3e8; }
+[data-testid="stSidebar"] h2 { font-size: 0.95rem; letter-spacing: .02em; color: #0b5c7a; margin-top: .6rem;
+  padding-top: .6rem; border-top: 1px solid #dbe3e8; }
+.ecg-brand { display: flex; align-items: center; gap: 14px; margin-bottom: 4px; }
+.ecg-brand .logo { width: 46px; height: 46px; border-radius: 12px; background: #0b5c7a; display: grid;
+  place-items: center; flex: none; }
+.ecg-brand h1 { font-size: 1.45rem; margin: 0; padding: 0; color: #1b2733; font-weight: 700; }
+.ecg-brand .sub { color: #5b6b78; font-size: .84rem; }
+.ecg-steps { display: flex; gap: 6px; margin: 14px 0 12px; }
+.ecg-steps .st { flex: 1; display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 8px;
+  background: #f2f6f8; color: #7a8a96; font-size: .85rem; font-weight: 500; border: 1px solid #e3e9ed; }
+.ecg-steps .st b { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; flex: none;
+  background: #dbe3e8; color: #5b6b78; font-size: .75rem; }
+.ecg-steps .st.done { color: #1b2733; background: #eaf4f0; border-color: #cfe5da; }
+.ecg-steps .st.done b { background: #2e7d32; color: #fff; }
+.ecg-steps .st.now { color: #0b5c7a; background: #e6f1f6; border-color: #0b5c7a; font-weight: 600; }
+.ecg-steps .st.now b { background: #0b5c7a; color: #fff; }
+.ecg-patient { display: grid; grid-template-columns: 1.5fr .9fr 1fr 1.5fr 1fr 1.1fr .9fr; gap: 0;
+  border: 1px solid #d5dde3; border-radius: 10px; overflow: hidden; margin-bottom: 14px; background: #fff; }
+.ecg-patient div { padding: 8px 14px; border-right: 1px solid #edf1f4; }
+.ecg-patient div:first-child { background: #0b5c7a; color: #fff; }
+.ecg-patient small { display: block; font-size: .7rem; text-transform: uppercase; letter-spacing: .05em;
+  color: #7a8a96; }
+.ecg-patient div:first-child small { color: #bfe0ec; }
+.ecg-patient span { font-weight: 600; font-size: .92rem; overflow-wrap: anywhere; }
+@media (max-width: 1000px) { .ecg-patient { grid-template-columns: repeat(2, 1fr); } }
+.ecg-cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin: 4px 0 16px; }
+@media (max-width: 1000px) { .ecg-cards { grid-template-columns: repeat(2, 1fr); } }
+.ecg-card { background: #fff; border: 1px solid #d5dde3; border-left: 5px solid var(--c); border-radius: 10px;
+  padding: 10px 14px 8px; }
+.ecg-card .lbl { color: #5b6b78; font-size: .78rem; font-weight: 500; }
+.ecg-card .val { font-size: 1.7rem; font-weight: 700; color: #1b2733; line-height: 1.25; }
+.ecg-card .val span { font-size: .8rem; font-weight: 500; color: #5b6b78; margin-left: 4px; }
+.ecg-card .tag { font-size: .76rem; font-weight: 600; color: var(--c); }
+.ecg-card .spark { color: var(--c); margin-top: 2px; }
+</style>
+""", unsafe_allow_html=True)
+
+with st.sidebar:
+    c_l, c_e = st.columns([1, 1])
+    c_l.radio("🌐", ["vi", "en"], key="lang", horizontal=True, label_visibility="collapsed",
+              format_func=lambda v: {"vi": "Tiếng Việt", "en": "English"}[v])
+    c_e.toggle(t("Chế độ chuyên gia"), key="chuyen_gia",
+               help=t("Bật để chỉnh chi tiết bộ lọc, xem phổ tần số và các thông số kỹ thuật."))
+chuyen_gia = ss["chuyen_gia"]
+
+st.markdown(
+    '<div class="ecg-brand"><div class="logo"><svg width="30" height="20" viewBox="0 0 30 20">'
+    '<polyline points="1,11 8,11 10,15 13,2 16,18 19,11 29,11" fill="none" stroke="#fff" stroke-width="2.2" '
+    'stroke-linejoin="round" stroke-linecap="round"/></svg></div><div>'
+    f'<h1>{t("Phân tích điện tâm đồ")}</h1>'
+    f'<div class="sub">{t("Lab Tin học Vật lý Kỹ thuật · Kết quả chỉ dùng cho học tập/nghiên cứu, không dùng để chẩn đoán.")}'
+    '</div></div></div>', unsafe_allow_html=True)
+khung_buoc = st.empty()
+khung_bn = st.empty()
 
 
-# ----------------------------------------------------------------------------
-# 1. HÀM XỬ LÝ
-# ----------------------------------------------------------------------------
-def _la_so(s: str) -> bool:
-    try:
-        float(s.replace(",", "."))
-        return True
-    except ValueError:
-        return False
+def ve_buoc(hien_tai: int):
+    """Thanh tiến trình 4 bước; các bước trước 'hien_tai' đã xong."""
+    ten = [t("Nhập dữ liệu"), t("Chọn bộ lọc"), t("Phân tích"), t("Xem & xuất báo cáo")]
+    o = []
+    for i, n in enumerate(ten):
+        lop = "done" if i < hien_tai else "now" if i == hien_tai else ""
+        o.append(f'<div class="st {lop}"><b>{"✓" if i < hien_tai else i + 1}</b>{n}</div>')
+    khung_buoc.markdown('<div class="ecg-steps">' + "".join(o) + "</div>", unsafe_allow_html=True)
 
 
-def doc_file(file) -> pd.DataFrame:
-    """Đọc CSV/TXT: tự nhận dấu phân cách và có/không có dòng tiêu đề.
-    Hỗ trợ cả file chỉ có 1 cột số (vd. dữ liệu ADC từ Arduino/ESP32)."""
-    text = file.getvalue().decode("utf-8-sig", errors="ignore")
-    dong = [l for l in text.splitlines() if l.strip()][:20]
-    if not dong:
-        raise ValueError("File rỗng.")
-    mau = dong[1] if len(dong) > 1 else dong[0]
-    sep = next((d for d in [";", "\t", ","] if d in mau), r"\s+")
-    tach = lambda l: [x for x in (l.split(sep) if sep != r"\s+" else l.split()) if x.strip() != ""]
-    co_tieu_de = not all(_la_so(x.strip()) for x in tach(dong[0]))
-    df = pd.read_csv(io.StringIO(text), sep=sep, engine="python",
-                     header=0 if co_tieu_de else None)
-    if not co_tieu_de:
-        df.columns = ["ecg"] if df.shape[1] == 1 else [f"kenh_{i+1}" for i in range(df.shape[1])]
-    df.columns = [str(c).strip() for c in df.columns]
-    for c in df.columns:
-        if df[c].dtype == object:
-            df[c] = pd.to_numeric(df[c].astype(str).str.replace(",", "."), errors="coerce")
-    return df.dropna(axis=1, how="all")
+def the(nhan, gia_tri, don_vi="", tag="", mau="#0b5c7a", spark=""):
+    return (f'<div class="ecg-card" style="--c:{mau}"><div class="lbl">{html.escape(nhan)}</div>'
+            f'<div class="val">{gia_tri}<span>{html.escape(don_vi)}</span></div>'
+            f'<div class="tag">{html.escape(tag)}</div><div class="spark">{spark}</div></div>')
 
 
-DUOI_NHAN = ("atr", "qrs", "ann")
-
-
-def doc_nhieu_file(files) -> tuple[pd.DataFrame, dict]:
-    """Đọc 1 hoặc nhiều file: CSV/TXT, EDF/EDF+ (.edf), WFDB (.hea + .dat) và nhãn WFDB (.atr/.qrs/.ann).
-    Trả về (bảng tín hiệu, thông tin: fs, đơn vị từng kênh, vị trí đỉnh R chuẩn nếu có, mô tả định dạng)."""
-    duoi = lambda f: f.name.lower().rsplit(".", 1)[-1]
-    edf = [f for f in files if duoi(f) == "edf"]
-    hea = [f for f in files if duoi(f) == "hea"]
-    nhan = [f for f in files if duoi(f) in DUOI_NHAN]
-    bang = [f for f in files if duoi(f) in ("csv", "txt")]
-    meta = dict(fs=None, units={}, ref=None, ky_hieu=None, mo_ta="", nguon_nhan="")
-
-    if edf:
-        d = doc_edf(edf[0].getvalue())
-        meta["mo_ta"] = f"EDF/EDF+ ({edf[0].name})"
-    elif hea:
-        dat = {f.name: f.getvalue() for f in files if duoi(f) == "dat"}
-        d = doc_wfdb(hea[0].getvalue().decode("latin-1"), dat)
-        meta["mo_ta"] = f"WFDB ({hea[0].name})"
-    elif bang:
-        return doc_file(bang[0]), meta
-    elif any(duoi(f) == "dat" for f in files):
-        raise ValueError("File .dat của PhysioNet cần tải lên kèm file .hea cùng tên.")
-    else:
-        raise ValueError("Chưa có file tín hiệu. Hãy tải .csv/.txt, .edf, hoặc cặp .hea + .dat.")
-
-    if not d["signals"]:
-        raise ValueError("File không có kênh tín hiệu nào.")
-    # chỉ giữ các kênh có cùng tần số lấy mẫu phổ biến nhất
-    fs_ds = list(d["fs"].values())
-    fs = max(set(fs_ds), key=fs_ds.count)
-    ten = [k for k in d["signals"] if d["fs"][k] == fs]
-    n = min(len(d["signals"][k]) for k in ten)
-    df = pd.DataFrame({k: d["signals"][k][:n] for k in ten})
-    meta.update(fs=fs, units={k: d["units"][k] for k in ten})
-
-    if nhan:
-        mau, ky = doc_nhan_wfdb(nhan[0].getvalue())
-        meta.update(ref=mau[mau < n], ky_hieu=ky, nguon_nhan=nhan[0].name)
-    elif d["ann_s"]:
-        mau = np.round(np.asarray(d["ann_s"]) * fs).astype(int)
-        meta.update(ref=mau[(mau >= 0) & (mau < n)], nguon_nhan="nhãn EDF+ trong file")
-    return df, meta
-
-
-def doi_chieu(det, ref, fs, dung_sai_ms):
-    """So khớp đỉnh R tìm được với nhãn chuẩn (mỗi nhãn khớp tối đa 1 đỉnh, trong ± dung sai)."""
-    tol = dung_sai_ms * fs / 1000
-    det = np.sort(np.asarray(det))
-    da_dung = np.zeros(len(det), bool)
-    tp, lech = 0, []
-    for r in np.sort(np.asarray(ref)):
-        j = np.searchsorted(det, r)
-        ung_vien = [k for k in (j - 1, j) if 0 <= k < len(det) and not da_dung[k] and abs(det[k] - r) <= tol]
-        if ung_vien:
-            k = min(ung_vien, key=lambda k: abs(det[k] - r))
-            da_dung[k] = True
-            tp += 1
-            lech.append(abs(det[k] - r) / fs * 1000)
-    fn, fp = len(ref) - tp, len(det) - tp
-    se = tp / (tp + fn) if tp + fn else np.nan
-    ppv = tp / (tp + fp) if tp + fp else np.nan
-    f1 = 2 * se * ppv / (se + ppv) if se + ppv else np.nan
-    return dict(TP=tp, FN=fn, FP=fp, Se=se, PPV=ppv, F1=f1, lech_ms=float(np.mean(lech)) if lech else np.nan)
-
-
-PP_TUY_CHINH = "Tùy chỉnh (Butterworth + Notch + Wavelet)"
-DS_PHUONG_PHAP = ["neurokit", "biosppy", "pantompkins1985", "hamilton2002", PP_TUY_CHINH]
-DS_NEN = ["Butterworth thông cao", "Wavelet (bỏ thành phần xấp xỉ)"]
-DS_WAVELET = ["sym8", "sym4", "db4", "db6", "coif3"]
-DS_NGUONG = ["Universal (VisuShrink)", "Bayes (BayesShrink)"]
-DS_KIEU_NGUONG = ["Mềm (soft)", "Cứng (hard)"]
-DS_UOC_LUONG = ["Theo từng mức", "Một mức chung"]
-# Tên và mô tả ngắn gọn cho người đọc lâm sàng: (phù hợp khi nào, lưu ý, tên thuật toán)
-TEN_PP = {"neurokit": "Tiêu chuẩn (mặc định)", "biosppy": "Giữ hình dạng sóng",
-          "pantompkins1985": "Đếm nhịp – gọn nhẹ", "hamilton2002": "Đếm nhịp – ít nhiễu chen",
-          PP_TUY_CHINH: "Tự chỉnh"}
-GIOI_THIEU_PP = {
-    "neurokit": ("Ổn định, dùng tốt cho hầu hết bản ghi.",
-                 "Đỉnh R thấp đi một chút sau khi lọc.", "NeuroKit2"),
-    "biosppy": ("Sóng P, QRS, T rõ nét nhất. Nên chọn khi cần đo PR, QRS, QT.",
-                "Bản ghi nhiều nhiễu cơ thì đường sóng còn hơi gợn.", "BioSPPy"),
-    "pantompkins1985": ("Thuật toán kinh điển, gọn nhẹ. Hợp để đếm nhịp và tính nhịp tim.",
-                        "Làm mất sóng P, T: không dùng để đo PR, QT.", "Pan-Tompkins 1985"),
-    "hamilton2002": ("Dải lọc hẹp hơn nên ít nhiễu chen vào. Hợp để đếm nhịp.",
-                     "Làm mất sóng P, T: không dùng để đo PR, QT.", "Hamilton 2002"),
-    PP_TUY_CHINH: ("Tự chọn từng bước lọc, dành cho người cần chỉnh chi tiết.",
-                   "Chỉnh không hợp lý có thể làm méo sóng. Nên bấm Đề xuất trước.",
-                   "Butterworth + Notch + Wavelet"),
-}
-TEN_NEN = {DS_NEN[0]: "Bộ lọc thông thường", DS_NEN[1]: "Wavelet (tốt khi nền trôi mạnh)"}
-TEN_NGUONG = {DS_NGUONG[0]: "Mạnh (Universal)", DS_NGUONG[1]: "Nhẹ, giữ chi tiết (Bayes)"}
-TEN_KIEU = {DS_KIEU_NGUONG[0]: "Mềm (mượt hơn)", DS_KIEU_NGUONG[1]: "Cứng (giữ biên độ)"}
-TEN_UOC = {DS_UOC_LUONG[0]: "Từng mức", DS_UOC_LUONG[1]: "Một mức chung"}
-
-
-def ten_phuong_an(r: dict) -> str:
-    return "Tự chỉnh riêng cho file này" if r["method"] == PP_TUY_CHINH else TEN_PP.get(r["method"], r["ten"])
-
-
-MAC_DINH_LOC = dict(method="neurokit", cf_bac=4, cf_lo=0.5, cf_hi=40.0, cf_nen=DS_NEN[0], cf_notch=True,
-                    cf_fnotch=50, cf_Q=30.0, cf_hai=False, cf_wl=True, cf_wavelet="sym8", cf_muc=4,
-                    cf_nguong=DS_NGUONG[0], cf_mem=DS_KIEU_NGUONG[0], cf_theomuc=DS_UOC_LUONG[0])
-
-
-def ap_dung_loc(method: str, cfg: dict | None):
-    """Ghi phương pháp/cấu hình được chọn vào các ô điều khiển ở thanh bên rồi tự phân tích lại."""
-    ss_ = st.session_state
-    ss_["method"] = method
-    if cfg:
-        ss_.update(cf_bac=int(cfg["bac"]), cf_lo=float(cfg["lo"]), cf_hi=float(cfg["hi"]), cf_nen=cfg["nen"],
-                   cf_notch=bool(cfg["notch"]), cf_fnotch=int(cfg["f_notch"]), cf_Q=float(cfg["Q"]),
-                   cf_hai=bool(cfg["hai"]), cf_wl=bool(cfg["wl_on"]), cf_wavelet=cfg["wavelet"],
-                   cf_muc=int(cfg["muc"]), cf_nguong=cfg["nguong"],
-                   cf_mem=DS_KIEU_NGUONG[0] if cfg["mem"] else DS_KIEU_NGUONG[1],
-                   cf_theomuc=DS_UOC_LUONG[0] if cfg["theo_muc"] else DS_UOC_LUONG[1])
-    ss_["tu_chay"] = True
-
-
-def _nguong_wavelet(d, sigma, kieu):
-    """Ngưỡng cho một mức chi tiết: Universal (VisuShrink) hoặc BayesShrink."""
-    if kieu.startswith("Universal"):
-        return sigma * np.sqrt(2 * np.log(len(d)))
-    sigma_x = np.sqrt(max(np.var(d) - sigma ** 2, 1e-12))
-    return sigma ** 2 / sigma_x
-
-
-def loc_tuy_chinh(x: np.ndarray, fs: int, cfg: dict) -> np.ndarray:
-    """Chuỗi lọc tùy chỉnh (tất cả đều không lệch pha):
-    1) Khử trôi đường nền: Butterworth thông cao hoặc Wavelet (bỏ thành phần xấp xỉ tần thấp)
-    2) Butterworth thông thấp/thông dải với bậc và tần số cắt do người dùng chọn
-    3) Notch 50/60 Hz (tùy chọn kèm hài bậc 2, 3)
-    4) Khử nhiễu bằng wavelet (DWT, ngưỡng mềm/cứng theo từng mức)"""
-    import pywt
-    from scipy import signal as ss
-
-    y = np.asarray(x, dtype=float) - np.median(x)
-    nyq = fs / 2
-    lo, hi = cfg["lo"], min(cfg["hi"], 0.99 * nyq)
-
-    # 1) Khử trôi nền
-    if cfg["nen"].startswith("Wavelet"):
-        w = pywt.Wavelet(cfg["wavelet"])
-        # chọn mức sao cho dải xấp xỉ [0, fs/2^(L+1)] nằm dưới tần số cắt dưới
-        L = int(np.ceil(np.log2(fs / lo))) - 1
-        L = int(np.clip(L, 1, pywt.dwt_max_level(len(y), w.dec_len)))
-        c = pywt.wavedec(y, w, level=L)
-        c[0] = np.zeros_like(c[0])
-        y = pywt.waverec(c, w)[: len(x)]
-        sos = ss.butter(cfg["bac"], hi, btype="lowpass", fs=fs, output="sos")
-    else:
-        sos = ss.butter(cfg["bac"], [lo, hi], btype="bandpass", fs=fs, output="sos")
-
-    # 2) Butterworth (sosfiltfilt: lọc 2 chiều → không lệch pha, bậc hiệu dụng gấp đôi)
-    y = ss.sosfiltfilt(sos, y)
-
-    # 3) Notch điện lưới
-    if cfg["notch"]:
-        hai = [1, 2, 3] if cfg["hai"] else [1]
-        for k in hai:
-            f0 = cfg["f_notch"] * k
-            if f0 < 0.99 * nyq:
-                b, a = ss.iirnotch(f0, cfg["Q"], fs=fs)
-                y = ss.filtfilt(b, a, y)
-
-    # 4) Khử nhiễu wavelet
-    if cfg["wl_on"]:
-        w = pywt.Wavelet(cfg["wavelet"])
-        L = min(cfg["muc"], pywt.dwt_max_level(len(y), w.dec_len))
-        c = pywt.wavedec(y, w, level=L)
-        sigma1 = np.median(np.abs(c[-1])) / 0.6745          # ước lượng nhiễu từ mức chi tiết mịn nhất
-        for i in range(1, len(c)):
-            sigma = np.median(np.abs(c[i])) / 0.6745 if cfg["theo_muc"] else sigma1
-            t = _nguong_wavelet(c[i], sigma, cfg["nguong"])
-            c[i] = pywt.threshold(c[i], t, mode="soft" if cfg["mem"] else "hard")
-        y = pywt.waverec(c, w)[: len(x)]
-    return y
-
-
-def mo_ta_loc(method: str, cfg: dict) -> str:
-    """Mô tả ngắn gọn, dễ hiểu bộ lọc đang dùng (hiện trên màn hình và trong báo cáo PDF)."""
-    if method != PP_TUY_CHINH:
-        return f"{TEN_PP.get(method, method)} ({GIOI_THIEU_PP.get(method, ('', '', method))[2]})"
-    s = [f"giữ dải {cfg['lo']:g}–{cfg['hi']:g} Hz"]
-    if cfg["nen"].startswith("Wavelet"):
-        s.append("làm phẳng nền bằng wavelet")
-    if cfg["notch"]:
-        s.append(f"lọc nhiễu điện {cfg['f_notch']} Hz")
-    if cfg["wl_on"]:
-        s.append("làm mịn wavelet")
-    return "Tự chỉnh: " + ", ".join(s)
-
-
-def xu_ly_ecg(ecg_raw: np.ndarray, fs: int, method: str, cfg: dict | None = None):
-    """Lọc tín hiệu, tìm đỉnh R, tính nhịp tim và chất lượng tín hiệu."""
-    if method == PP_TUY_CHINH:
-        ecg_clean = loc_tuy_chinh(ecg_raw, fs, cfg)
-    else:
-        ecg_clean = nk.ecg_clean(ecg_raw, sampling_rate=fs, method=method)
-    _, info = nk.ecg_peaks(ecg_clean, sampling_rate=fs, correct_artifacts=True)
-    rpeaks = np.asarray(info["ECG_R_Peaks"], dtype=int)
-    if len(rpeaks) < 3:
-        raise ValueError("Tìm được quá ít đỉnh R. Kiểm tra lại cột dữ liệu và tần số lấy mẫu.")
-    rr_ms = np.diff(rpeaks) / fs * 1000
-    hr = 60000 / rr_ms
-    try:
-        quality = nk.ecg_quality(ecg_clean, rpeaks=rpeaks, sampling_rate=fs)
-        quality = float(np.nanmean(quality))
-    except Exception:
-        quality = np.nan
-    return ecg_clean, rpeaks, rr_ms, hr, quality
-
-
-def tinh_khoang_song(ecg_clean, rpeaks, fs):
-    """Ước tính PR, QRS, QT, QTc (Bazett) bằng phân tích hình thái sóng.
-    Chỉ dùng tối đa 300 nhịp đầu (đủ để lấy trung vị) cho nhanh với bản ghi dài."""
-    if len(rpeaks) > 300:
-        rpeaks = rpeaks[:300]
-        ecg_clean = ecg_clean[: rpeaks[-1] + int(fs)]
-    try:
-        _, waves = nk.ecg_delineate(ecg_clean, rpeaks, sampling_rate=fs, method="dwt")
-    except Exception:
-        return {}
-
-    def trung_vi(a, b):
-        a = np.asarray(waves.get(a, []), dtype=float)
-        b = np.asarray(waves.get(b, []), dtype=float)
-        n = min(len(a), len(b))
-        if n == 0:
-            return np.nan
-        d = (b[:n] - a[:n]) / fs * 1000
-        d = d[(d > 0) & np.isfinite(d)]
-        return float(np.median(d)) if len(d) else np.nan
-
-    # Dùng đỉnh Q/S (ổn định hơn mốc onset/offset của DWT, vốn hay làm QRS rộng giả)
-    pr = trung_vi("ECG_P_Onsets", "ECG_R_Onsets")
-    qrs = trung_vi("ECG_Q_Peaks", "ECG_S_Peaks")
-    qt = trung_vi("ECG_Q_Peaks", "ECG_T_Offsets")
-    rr_s = np.median(np.diff(rpeaks)) / fs
-    qtc_b = qt / np.sqrt(rr_s) if np.isfinite(qt) else np.nan          # Bazett
-    qtc_f = qt / np.cbrt(rr_s) if np.isfinite(qt) else np.nan          # Fridericia
-    return {"PR (ms)": pr, "QRS (ms)": qrs, "QT (ms)": qt,
-            "QTc Bazett (ms)": qtc_b, "QTc Fridericia (ms)": qtc_f}
-
-
-def tinh_hrv(rpeaks, fs):
-    """Chỉ số HRV miền thời gian và Poincaré."""
-    hrv = nk.hrv_time(rpeaks, sampling_rate=fs)
-    lay = lambda df, c: float(df[c].iloc[0]) if c in df else np.nan
-    # Poincaré tính trực tiếp: SD1 = sqrt(0,5)·SD(ΔRR), SD2 = sqrt(2·SDNN² − SD1²)
-    rr = np.diff(rpeaks) / fs * 1000
-    sd1 = np.sqrt(0.5) * np.std(np.diff(rr), ddof=1)
-    sd2 = np.sqrt(max(2 * np.var(rr, ddof=1) - sd1 ** 2, 0))
-    return {
-        "MeanNN (ms)": lay(hrv, "HRV_MeanNN"),
-        "SDNN (ms)": lay(hrv, "HRV_SDNN"),
-        "RMSSD (ms)": lay(hrv, "HRV_RMSSD"),
-        "pNN50 (%)": lay(hrv, "HRV_pNN50"),
-        "SD1 (ms)": float(sd1),
-        "SD2 (ms)": float(sd2),
-    }
-
-
-def nguong_nhip(thai_nhi: bool):
-    """Ngưỡng nhịp tim bình thường: người lớn khi nghỉ 60–100 l/p; thai nhi (FIGO) 110–160 l/p."""
-    return (110, 160) if thai_nhi else (60, 100)
-
-
-def danh_gia(hr_mean, rr_ms, khoang, thai_nhi=False):
-    """Nhận xét tự động dựa trên ngưỡng tham khảo (người lớn khi nghỉ, hoặc thai nhi theo FIGO)."""
-    nx = []
-    lo, hi = nguong_nhip(thai_nhi)
-    doi_tuong = "nhịp tim thai" if thai_nhi else "nhịp tim"
-    if hr_mean < lo:
-        nx.append(f"{doi_tuong.capitalize()} trung bình {hr_mean:.0f} l/p: chậm hơn ngưỡng {lo}–{hi} l/p.")
-    elif hr_mean > hi:
-        nx.append(f"{doi_tuong.capitalize()} trung bình {hr_mean:.0f} l/p: nhanh hơn ngưỡng {lo}–{hi} l/p.")
-    else:
-        nx.append(f"{doi_tuong.capitalize()} trung bình {hr_mean:.0f} l/p: trong ngưỡng {lo}–{hi} l/p.")
-
-    cv = np.std(rr_ms) / np.mean(rr_ms) * 100
-    if cv > 15:
-        nx.append(f"Khoảng RR dao động mạnh (CV = {cv:.1f}%): nhịp không đều, nên xem lại sóng.")
-    else:
-        nx.append(f"Khoảng RR tương đối đều (CV = {cv:.1f}%).")
-
-    lech = np.abs(np.diff(rr_ms)) / rr_ms[:-1]
-    n_bat_thuong = int(np.sum(lech > 0.2))
-    if n_bat_thuong:
-        nx.append(f"Có {n_bat_thuong} nhịp có RR lệch >20% so với nhịp trước (nghi ngoại tâm thu hoặc nhiễu).")
-
-    if thai_nhi:
-        nx.append("Các khoảng PR/QRS/QT của thai nhi không được đánh giá theo ngưỡng người lớn.")
-        return nx
-    nguong = {"PR (ms)": (120, 200), "QRS (ms)": (60, 120), "QTc Bazett (ms)": (350, 450)}
-    for k, (lo, hi) in nguong.items():
-        v = khoang.get(k, np.nan)
-        if np.isfinite(v):
-            tt = "trong ngưỡng" if lo <= v <= hi else "ngoài ngưỡng"
-            nx.append(f"{k.split(' (')[0]} = {v:.0f} ms: {tt} tham khảo {lo}–{hi} ms.")
-    return nx
-
+MAU_TIN_CAY = {"Tốt": "#2e7d32", "Trung bình": "#ef8f00", "Kém": "#c62828"}
 
 # ----------------------------------------------------------------------------
-# 2. HÀM VẼ
-# ----------------------------------------------------------------------------
-def ve_luoi_ecg(ax, t0, t1, ymin, ymax):
-    """Lưới giấy điện tim: ô nhỏ 0,04 s × 0,1 mV, ô lớn 0,2 s × 0,5 mV."""
-    for x in np.arange(np.floor(t0 / 0.04) * 0.04, t1, 0.04):
-        ax.axvline(x, color="#f4c2c2", lw=0.4, zorder=0)
-    for y in np.arange(np.floor(ymin / 0.1) * 0.1, ymax, 0.1):
-        ax.axhline(y, color="#f4c2c2", lw=0.4, zorder=0)
-    for x in np.arange(np.floor(t0 / 0.2) * 0.2, t1, 0.2):
-        ax.axvline(x, color="#e08080", lw=0.8, zorder=0)
-    for y in np.arange(np.floor(ymin / 0.5) * 0.5, ymax, 0.5):
-        ax.axhline(y, color="#e08080", lw=0.8, zorder=0)
-    ax.set_xlim(t0, t1)
-    ax.set_ylim(ymin, ymax)
-
-
-def fig_dai_song(ecg_clean, rpeaks, fs, t_start, dur, ref=None):
-    i0, i1 = int(t_start * fs), int(min((t_start + dur) * fs, len(ecg_clean)))
-    t = np.arange(i0, i1) / fs
-    seg = ecg_clean[i0:i1]
-    pad = max(0.15 * (seg.max() - seg.min()), 0.02)
-    ymin, ymax = seg.min() - pad, seg.max() + pad
-    # 25 mm/s, 10 mm/mV  -> 1 s = 25 mm, 1 mV = 10 mm (tỷ lệ khung hình đúng chuẩn)
-    w_in = dur * 25 / 25.4
-    h_in = (ymax - ymin) * 10 / 25.4
-    scale = min(1.0, 14 / w_in)
-    phong_dai = h_in * scale < 2.2           # tín hiệu biên độ nhỏ (vd. ECG thai nhi) -> phóng to trục dọc
-    fig, ax = plt.subplots(figsize=(w_in * scale, max(h_in * scale, 2.2)))
-    ve_luoi_ecg(ax, t[0], t[-1], ymin, ymax)
-    ax.plot(t, seg, color="black", lw=1)
-    rp = rpeaks[(rpeaks >= i0) & (rpeaks < i1)]
-    ax.plot(rp / fs, ecg_clean[rp], "o", color="#1f77b4", ms=4)
-    tieu_de = ("Dải sóng ECG (25 mm/s, " + ("biên độ phóng đại" if phong_dai else "10 mm/mV")
-               + ") · chấm xanh: đỉnh R app tìm được")
-    if ref is not None:
-        rf = ref[(ref >= i0) & (ref < i1)]
-        ax.plot(rf / fs, np.full(len(rf), ymax - pad * 0.4), "v", color="#d62728", ms=6)
-        tieu_de += " · tam giác đỏ: nhãn chuẩn"
-    ax.set_xlabel("Thời gian (s)")
-    ax.set_ylabel("Biên độ (mV)")
-    ax.set_title(tieu_de)
-    fig.tight_layout()
-    return fig
-
-
-def fig_truoc_sau_loc(raw, clean, fs, dur=5):
-    n = int(min(dur * fs, len(raw)))
-    t = np.arange(n) / fs
-    fig, axs = plt.subplots(2, 1, figsize=(12, 4.5), sharex=True)
-    axs[0].plot(t, raw[:n], color="gray", lw=0.8)
-    axs[0].set_title("Tín hiệu gốc")
-    axs[1].plot(t, clean[:n], color="crimson", lw=0.9)
-    axs[1].set_title("Sau khi lọc")
-    axs[1].set_xlabel("Thời gian (s)")
-    for a in axs:
-        a.set_ylabel("mV")
-        a.grid(alpha=0.3)
-    fig.tight_layout()
-    return fig
-
-
-def fig_pho(raw, clean, fs):
-    """Phổ công suất (Welch) trước và sau lọc."""
-    from scipy.signal import welch
-    n = int(min(len(raw), 4 * fs))
-    f1, p1 = welch(raw - np.mean(raw), fs=fs, nperseg=n)
-    f2, p2 = welch(clean - np.mean(clean), fs=fs, nperseg=n)
-    fig, ax = plt.subplots(figsize=(12, 3.5))
-    ax.semilogy(f1, p1 + 1e-20, color="gray", lw=0.9, label="Trước lọc")
-    ax.semilogy(f2, p2 + 1e-20, color="crimson", lw=1.1, label="Sau lọc")
-    ax.set_xlim(0, fs / 2)
-    ax.set_xlabel("Tần số (Hz)")
-    ax.set_ylabel("Mật độ công suất (mV²/Hz)")
-    ax.set_title("Phổ công suất (Welch) trước và sau lọc")
-    ax.grid(alpha=0.3, which="both")
-    ax.legend(loc="upper right")
-    fig.tight_layout()
-    return fig
-
-
-def fig_dap_ung(fs, cfg):
-    """Đáp ứng biên độ của phần lọc tuyến tính (Butterworth 2 chiều + Notch)."""
-    from scipy import signal as ss
-    nyq = fs / 2
-    hi = min(cfg["hi"], 0.99 * nyq)
-    f = np.linspace(0.01, nyq, 4000)
-    if cfg["nen"].startswith("Wavelet"):
-        sos = ss.butter(cfg["bac"], hi, btype="lowpass", fs=fs, output="sos")
-    else:
-        sos = ss.butter(cfg["bac"], [cfg["lo"], hi], btype="bandpass", fs=fs, output="sos")
-    _, h = ss.sosfreqz(sos, worN=f, fs=fs)
-    H = np.abs(h) ** 2                      # lọc 2 chiều → |H|²
-    if cfg["notch"]:
-        for k in ([1, 2, 3] if cfg["hai"] else [1]):
-            f0 = cfg["f_notch"] * k
-            if f0 < 0.99 * nyq:
-                b, a = ss.iirnotch(f0, cfg["Q"], fs=fs)
-                _, hn = ss.freqz(b, a, worN=f, fs=fs)
-                H = H * np.abs(hn) ** 2
-    fig, ax = plt.subplots(figsize=(12, 3.2))
-    ax.plot(f, 20 * np.log10(H + 1e-12), color="#1f77b4")
-    ax.axhline(-3, color="gray", ls="--", lw=0.8)
-    ax.text(nyq * 0.99, -3, "−3 dB", ha="right", va="bottom", fontsize=8, color="gray")
-    ax.set_ylim(-80, 5)
-    ax.set_xlim(0, nyq)
-    ax.set_xlabel("Tần số (Hz)")
-    ax.set_ylabel("Biên độ (dB)")
-    ax.set_title("Đáp ứng tần số của bộ lọc (Butterworth lọc 2 chiều + Notch)")
-    ax.grid(alpha=0.3)
-    fig.tight_layout()
-    return fig
-
-
-def fig_nhip_tim(rpeaks, hr, fs, band=(60, 100)):
-    fig, ax = plt.subplots(figsize=(12, 3))
-    ax.plot(rpeaks[1:] / fs, hr, color="crimson", lw=1.2)
-    ax.axhspan(band[0], band[1], color="green", alpha=0.08, label=f"Ngưỡng {band[0]}–{band[1]} l/p")
-    ax.set_xlabel("Thời gian (s)")
-    ax.set_ylabel("Nhịp tim (l/p)")
-    ax.set_title("Nhịp tim tức thời theo thời gian")
-    ax.grid(alpha=0.3)
-    ax.legend(loc="upper right")
-    fig.tight_layout()
-    return fig
-
-
-def fig_rr(rr_ms):
-    fig, axs = plt.subplots(1, 2, figsize=(11, 4))
-    axs[0].hist(rr_ms, bins=30, color="#1f77b4", edgecolor="white")
-    axs[0].set_xlabel("Khoảng RR (ms)")
-    axs[0].set_ylabel("Số nhịp")
-    axs[0].set_title("Phân bố khoảng RR")
-    axs[1].scatter(rr_ms[:-1], rr_ms[1:], s=10, alpha=0.6, color="#ff7f0e")
-    lo, hi = rr_ms.min() * 0.95, rr_ms.max() * 1.05
-    axs[1].plot([lo, hi], [lo, hi], "--", color="gray", lw=1)
-    axs[1].set_xlabel("RRₙ (ms)")
-    axs[1].set_ylabel("RRₙ₊₁ (ms)")
-    axs[1].set_title("Biểu đồ Poincaré")
-    for a in axs:
-        a.grid(alpha=0.3)
-    fig.tight_layout()
-    return fig
-
-
-def tao_pdf(thong_tin, bang_chi_so, nhan_xet, figs, tieu_de_nx="CÁC ĐIỂM CẦN BÁC SĨ LƯU Ý"):
-    """Báo cáo PDF: trang 1 là thông tin + bảng so sánh chỉ số + điểm lưu ý, các trang sau là biểu đồ."""
-    buf = io.BytesIO()
-    with PdfPages(buf) as pdf:
-        fig = plt.figure(figsize=(8.27, 11.69))  # A4
-        y = 0.95
-        fig.text(0.5, y, "BÁO CÁO PHÂN TÍCH ECG", ha="center", fontsize=16, weight="bold")
-        y -= 0.05
-        import textwrap
-        for k, v in thong_tin.items():
-            for i, dong in enumerate(textwrap.wrap(f"{k}: {v}", 95)):
-                fig.text(0.08 if i == 0 else 0.10, y, dong, fontsize=10)
-                y -= 0.022
-        y -= 0.02
-        fig.text(0.08, y, "SO SÁNH CHỈ SỐ VỚI KHOẢNG THAM CHIẾU", fontsize=12, weight="bold")
-        y -= 0.03
-        cot = list(bang_chi_so.columns)
-        x_cot = np.linspace(0.08, 0.92, len(cot) + 1)[:-1]
-        for xc, c in zip(x_cot, cot):
-            fig.text(xc, y, c, fontsize=8.5, weight="bold")
-        y -= 0.022
-        for _, r in bang_chi_so.iterrows():
-            for xc, c in zip(x_cot, cot):
-                mau = {"Cao": "#c62828", "Thấp": "#1565c0"}.get(str(r[c]), "black") if c == "Đánh giá" else "black"
-                fig.text(xc, y, str(r[c])[:24], fontsize=8.5, color=mau)
-            y -= 0.02
-        y -= 0.02
-        fig.text(0.08, y, tieu_de_nx, fontsize=12, weight="bold")
-        y -= 0.03
-        for line in nhan_xet or ["Tất cả chỉ số đánh giá được đều nằm trong khoảng tham chiếu."]:
-            for i, d in enumerate(textwrap.wrap(line, 105)):
-                fig.text(0.10 if i == 0 else 0.115, y, ("• " if i == 0 else "") + d, fontsize=9)
-                y -= 0.02
-            y -= 0.004
-        y -= 0.03
-        fig.text(0.08, y, "Kết luận của bác sĩ: ...........................................................", fontsize=10)
-        fig.text(0.08, 0.04, "Kết quả tự động chỉ dùng cho học tập/nghiên cứu, không thay thế chẩn đoán y khoa.",
-                 fontsize=8, style="italic", color="gray")
-        pdf.savefig(fig)
-        plt.close(fig)
-        for f in figs:
-            pdf.savefig(f, bbox_inches="tight")
-    buf.seek(0)
-    return buf
-
-
-def fmt(v, nd=1):
-    return "—" if v is None or not np.isfinite(v) else f"{v:.{nd}f}"
-
-
-# ----------------------------------------------------------------------------
-# 3. GIAO DIỆN - THANH BÊN
+# Thanh bên: dữ liệu và bệnh nhân
 # ----------------------------------------------------------------------------
 with st.sidebar:
-    st.header("1. Dữ liệu")
-    nguon = st.radio("Nguồn dữ liệu", ["Dùng dữ liệu mẫu", "Tải file lên"])
+    st.header(t("1. Dữ liệu"))
+    nguon = st.radio(t("Nguồn dữ liệu"), ["Dùng dữ liệu mẫu", "Tải file lên"], format_func=t, key="nguon")
     files = []
     if nguon == "Tải file lên":
+        # nhãn cố định (song ngữ) để file đã tải không bị mất khi đổi ngôn ngữ
         files = st.file_uploader(
-            "File dữ liệu ECG", type=["csv", "txt", "edf", "hea", "dat"] + list(DUOI_NHAN),
-            accept_multiple_files=True,
-            help="CSV/TXT; EDF/EDF+ (.edf); PhysioNet WFDB: chọn cùng lúc .hea + .dat, "
-                 "có thể kèm file nhãn .atr/.qrs/.ann để đối chiếu đỉnh R.") or []
+            "File ECG · ECG files", type=DUOI_HO_TRO, accept_multiple_files=True, key="files",
+            help="CSV/TXT · EDF/EDF+ (.edf) · Biopac (.acq) · PhysioNet WFDB (.hea + .dat; "
+                 "+ .atr/.qrs/.ann)") or []
 
-    st.header("2. Thông tin bệnh nhân")
-    ten = st.text_input("Họ tên / mã", "Bệnh nhân mẫu")
-    tuoi = st.number_input("Tuổi", 1, 120, 25)
-    gioi = st.selectbox("Giới tính", ["Nam", "Nữ"])
+    st.header(t("2. Thông tin bệnh nhân"))
+    if ss.get("ten_bn") in (None, "Bệnh nhân mẫu", "Sample patient"):
+        ss["ten_bn"] = t("Bệnh nhân mẫu")
+    ss.setdefault("tuoi", 25)
+    ten = st.text_input(t("Họ tên / mã"), key="ten_bn")
+    c_t, c_g = st.columns(2)
+    tuoi = c_t.number_input(t("Tuổi"), 1, 120, key="tuoi")
+    gioi = c_g.selectbox(t("Giới tính"), ["Nam", "Nữ"], format_func=t, key="gioi")
 
+ve_buoc(0)
 
 # ----------------------------------------------------------------------------
-# 4. ĐỌC DỮ LIỆU
+# Đọc dữ liệu
 # ----------------------------------------------------------------------------
 if nguon == "Dùng dữ liệu mẫu":
-    fs_default = 500
-    sig = nk.ecg_simulate(duration=60, sampling_rate=fs_default, heart_rate=75, noise=0.05, random_state=42)
-    df = pd.DataFrame({"time_s": np.arange(len(sig)) / fs_default, "ecg_mV": sig})
+    fs_file = 500
+    sig = nk.ecg_simulate(duration=60, sampling_rate=fs_file, heart_rate=75, noise=0.05, random_state=42)
+    df = pd.DataFrame({"time_s": np.arange(len(sig)) / fs_file, "ecg_mV": sig})
     meta = dict(fs=None, units={}, ref=None, ky_hieu=None, mo_ta="", nguon_nhan="")
 else:
     if not files:
-        st.info("⬅️ Hãy tải file ECG lên ở thanh bên: CSV/TXT, EDF (.edf), "
-                "hoặc dữ liệu PhysioNet WFDB (.hea + .dat, kèm nhãn .atr/.qrs nếu có).")
+        st.info(t("⬅️ Hãy tải file ECG lên ở thanh bên: CSV/TXT, EDF (.edf), Biopac (.acq), "
+                  "hoặc dữ liệu PhysioNet WFDB (.hea + .dat, kèm nhãn .atr/.qrs nếu có)."))
         st.stop()
     try:
         df, meta = doc_nhieu_file(files)
     except Exception as e:
-        st.error(f"Không đọc được file: {e}")
+        st.error(t("Không đọc được file: {e}", e=e))
         st.stop()
-    fs_default = int(round(meta["fs"])) if meta["fs"] else 500
+    fs_file = int(round(meta["fs"])) if meta["fs"] else 500
+ten_file = ",".join(sorted(f.name for f in files)) if nguon == "Tải file lên" else "du_lieu_mau"
 
+# ----------------------------------------------------------------------------
+# Thanh bên: tín hiệu
+# ----------------------------------------------------------------------------
 with st.sidebar:
-    st.header("3. Tín hiệu")
+    st.header(t("3. Tín hiệu"))
     cols_num = df.select_dtypes(include="number").columns.tolist()
     if not cols_num:
-        st.error("File không có cột số.")
+        st.error(t("File không có cột số."))
         st.stop()
     la_thoi_gian = lambda c: "time" in c.lower() or c.lower() in ("t", "s")
-    goi_y = ([c for c in cols_num if any(k in c.lower() for k in ("direct", "ecg", "mlii"))]
+    goi_y = ([c for c in cols_num if any(k in c.lower() for k in ("direct", "ecg", "ekg", "mlii"))]
              or [c for c in cols_num if not la_thoi_gian(c)] or cols_num)
-    col_ecg = st.selectbox("Cột tín hiệu ECG", cols_num, index=cols_num.index(goi_y[0]))
-    # Tự ước tính fs nếu có cột thời gian
+    if ss.get("col_ecg") not in cols_num:
+        ss["col_ecg"] = goi_y[0]
+    col_ecg = st.selectbox(t("Cột tín hiệu ECG"), cols_num, key="col_ecg")
+
     col_time = next((c for c in cols_num if la_thoi_gian(c)), None)
     if meta["fs"]:
-        col_time = "fs"                     # tần số đã đọc từ file
+        col_time = "fs"
     elif col_time is not None and len(df) > 2:
         dt = np.median(np.diff(df[col_time].values[:1000]))
         if dt > 0:
-            fs_default = int(round(1 / dt))
-    fs = st.number_input("Tần số lấy mẫu (Hz)", 50, 10000, fs_default)
-    if meta["fs"]:
-        st.caption(f"Đọc từ file {meta['mo_ta']}: {meta['fs']:g} Hz, {len(cols_num)} kênh.")
-    if col_time is None:
-        st.warning("File không có cột thời gian: hãy nhập **đúng tần số lấy mẫu** của thiết bị đo, "
-                   "nếu sai thì nhịp tim và mọi khoảng thời gian sẽ sai theo.")
-
-    # Gợi ý đơn vị: dữ liệu toàn số nguyên dương lớn thường là giá trị ADC thô
+            fs_file = int(round(1 / dt))
+    fs_chua_ro = col_time is None                     # file không ghi tần số lấy mẫu
+    co_don_vi = bool(meta["units"].get(col_ecg))
     v = pd.to_numeric(df[col_ecg], errors="coerce").dropna()
-    la_adc = len(v) > 0 and v.min() >= 0 and v.max() > 100 and np.allclose(v, v.round())
-    ds_don_vi = ["mV", "V (đổi sang mV)", "µV (đổi sang mV)",
-                 "ADC 12-bit → mV (giả định AD8232, 3,3 V, khuếch đại 1100)",
-                 "ADC thô (chuẩn hoá, không có đơn vị)"]
-    u = meta["units"].get(col_ecg, "").replace("μ", "u").replace("µ", "u").lower()
-    chi_so_dv = {"uv": 2, "mv": 0, "v": 1}.get(u, 3 if la_adc else 0)
-    don_vi = st.selectbox("Đơn vị tín hiệu", ds_don_vi, index=chi_so_dv,
-                          help=f"Đơn vị ghi trong file: {meta['units'][col_ecg]}" if col_ecg in meta["units"] else None)
+    dv_mac_dinh = DS_DON_VI[chi_so_don_vi_mac_dinh(meta["units"].get(col_ecg, ""), v)]
 
+    def ap_thiet_bi():
+        p = THIET_BI.get(ss.get("thiet_bi"))
+        if p:
+            if ss.get("_fs_chua_ro", True):
+                ss["fs_nhap"] = p[0]
+            if not ss.get("_co_don_vi", False):
+                ss["don_vi"] = p[1]
+
+    ss["_fs_chua_ro"], ss["_co_don_vi"] = fs_chua_ro, co_don_vi
     goi_y_thai = any(k in " ".join(cols_num + [f.name for f in files]).lower()
                      for k in ("direct", "abdomen", "fetal", "fecg", "adfecg"))
-    doi_tuong = st.selectbox("Đối tượng", ["Người lớn", "Thai nhi (FECG)"], index=1 if goi_y_thai else 0,
-                             help="Đổi ngưỡng đánh giá: người lớn 60–100 l/p, thai nhi 110–160 l/p (FIGO).")
+    if ss.get("_nguon") != (ten_file, col_ecg, fs_file):        # đổi file/kênh → về giá trị của file
+        if ss.get("_nguon", ("",))[0] != ten_file:
+            ss["doi_tuong"] = "Thai nhi (FECG)" if goi_y_thai else "Người lớn"
+        ss["_nguon"] = (ten_file, col_ecg, fs_file)
+        ss["fs_nhap"], ss["don_vi"] = fs_file, dv_mac_dinh
+        ap_thiet_bi()
+
+    thiet_bi = st.selectbox(t("Thiết bị đo"), list(THIET_BI), key="thiet_bi", format_func=t, on_change=ap_thiet_bi,
+                            help=t("Chọn máy đo để app tự điền tần số lấy mẫu và đơn vị. "
+                                   "Thông tin ghi trong file luôn được ưu tiên."))
+    if THIET_BI.get(thiet_bi):
+        st.caption("ℹ️ " + t(THIET_BI[thiet_bi][2]) + ("" if fs_chua_ro else " " + t("Tần số ghi trong file được ưu tiên.")))
+    fs = int(st.number_input(t("Tần số lấy mẫu (Hz)"), 50, 10000, key="fs_nhap"))
+    if meta["fs"]:
+        st.caption(t("Đọc từ file {mt}: {fs} Hz, {n} kênh.", mt=meta["mo_ta"], fs=f"{meta['fs']:g}", n=len(cols_num))
+                   + (" " + t("Bỏ {k} kênh có tần số khác.", k=meta["bo_kenh"]) if meta.get("bo_kenh") else ""))
+    if fs_chua_ro and not THIET_BI.get(thiet_bi):
+        st.warning(t("File không có cột thời gian: hãy chọn **thiết bị đo** hoặc nhập **đúng tần số lấy mẫu**, "
+                     "nếu sai thì nhịp tim và mọi khoảng thời gian sẽ sai theo."))
+    don_vi = st.selectbox(t("Đơn vị tín hiệu"), DS_DON_VI, key="don_vi", format_func=t,
+                          help=t("Đơn vị ghi trong file: {u}", u=meta["units"][col_ecg]) if co_don_vi else None)
+
+    doi_tuong = st.selectbox(t("Đối tượng"), ["Người lớn", "Thai nhi (FECG)"], key="doi_tuong", format_func=t, help=t("Đổi ngưỡng đánh giá: người lớn 60–100 l/p, thai nhi 110–160 l/p (FIGO)."))
     thai_nhi = doi_tuong.startswith("Thai")
 
     dung_sai = None
     if meta["ref"] is not None:
-        st.markdown(f"**Nhãn chuẩn:** {len(meta['ref'])} đỉnh R ({meta['nguon_nhan']})")
-        dung_sai = st.slider("Dung sai khớp đỉnh R (ms)", 10, 150, 50 if thai_nhi else 150, 10,
-                             help="Chuẩn ANSI/AAMI EC57 dùng 150 ms cho người lớn; ECG thai nhi nhịp nhanh "
-                                  "nên thường dùng 50 ms.")
+        st.markdown(t("**Nhãn chuẩn:** {n} đỉnh R ({src})", n=len(meta["ref"]), src=meta["nguon_nhan"]))
+        mac_dinh_ds = 50 if thai_nhi else 150
+        if ss.get("_ds_cho") != thai_nhi:                 # đổi đối tượng → về dung sai chuẩn
+            ss["_ds_cho"], ss["dung_sai"] = thai_nhi, mac_dinh_ds
+        dung_sai = (st.slider(t("Dung sai khớp đỉnh R (ms)"), 10, 150, step=10, key="dung_sai",
+                              help=t("Chuẩn ANSI/AAMI EC57 dùng 150 ms cho người lớn; ECG thai nhi nhịp nhanh "
+                                     "nên thường dùng 50 ms.")) if chuyen_gia else mac_dinh_ds)
 
-    st.header("4. Bộ lọc")
-    ss_ = st.session_state
-    for k, v in MAC_DINH_LOC.items():          # giá trị mặc định (dùng session_state để nút "Áp dụng" ghi đè được)
-        ss_.setdefault(k, v)
-    nyq = fs / 2
-    hi_max = float(np.floor(nyq * 0.99 * 10) / 10)
-    ss_["cf_hi"] = min(float(ss_["cf_hi"]), hi_max)
+# ----------------------------------------------------------------------------
+# Thanh bên: bộ lọc
+# ----------------------------------------------------------------------------
+def ap_dung_loc(method: str, cfg: dict | None):
+    """Ghi phương án được chọn vào các ô điều khiển rồi tự phân tích lại."""
+    ss["method"] = method
+    if cfg:
+        ss.update(cfg_sang_session(cfg))
+    ss["tu_chay"] = True
 
-    st.button("🧭 Đề xuất bộ lọc cho file này", use_container_width=True,
-              on_click=lambda: ss_.update(can_de_xuat=True),
-              help="App tự thử mọi cách lọc trên file này và gợi ý cách tốt nhất (mất vài giây).")
-    method = st.selectbox("Phương pháp lọc", DS_PHUONG_PHAP, key="method", format_func=lambda m: TEN_PP[m])
+
+with st.sidebar:
+    st.header(t("4. Bộ lọc"))
+    hi_max = float(np.floor(fs / 2 * 0.99 * 10) / 10)
+    ss["cf_hi"] = min(float(ss["cf_hi"]), hi_max)
+    st.button(t("🧭 Đề xuất bộ lọc cho file này"), use_container_width=True,
+              on_click=lambda: ss.update(can_de_xuat=True),
+              help=t("App tự thử mọi cách lọc trên file này và gợi ý cách tốt nhất (mất vài giây)."))
+    method = st.selectbox(t("Phương pháp lọc"), DS_PHUONG_PHAP, key="method", format_func=lambda m: t(TEN_PP[m]))
     phu_hop, luu_y_pp, thuat_toan = GIOI_THIEU_PP[method]
-    st.caption(f"✅ {phu_hop}  \n⚠️ {luu_y_pp}  \nThuật toán: {thuat_toan}")
+    st.caption(f"✅ {t(phu_hop)}  \n⚠️ {t(luu_y_pp)}" + (f"  \n{t('Thuật toán')}: {thuat_toan}" if chuyen_gia else ""))
     cfg = None
-    if method == PP_TUY_CHINH:
-        st.markdown("**① Giữ dải tần của tim** · Butterworth")
-        bac = st.slider("Độ dứt khoát khi cắt (bậc)", 1, 8, key="cf_bac",
-                        help="Cao hơn: cắt gọn hơn nhưng dễ tạo gợn quanh QRS. Bậc 2–4 là đủ cho ECG.")
+    if method == PP_TUY_CHINH and not chuyen_gia:
+        cfg = cfg_tu_session(ss)
+        st.caption("⚙️ " + mo_ta_loc(method, cfg) + ". " + t("Bật **Chế độ chuyên gia** để chỉnh từng bước lọc."))
+    elif method == PP_TUY_CHINH:
+        st.markdown(t("**① Giữ dải tần của tim** · Butterworth"))
+        st.slider(t("Độ dứt khoát khi cắt (bậc)"), 1, 8, key="cf_bac",
+                  help=t("Cao hơn: cắt gọn hơn nhưng dễ tạo gợn quanh QRS. Bậc 2–4 là đủ cho ECG."))
         c_lo, c_hi = st.columns(2)
-        lo = c_lo.number_input("Bỏ phần dưới (Hz)", 0.05, 5.0, step=0.05, format="%.2f", key="cf_lo",
-                               help="0,5 Hz: làm phẳng đường nền. 0,05 Hz: giữ nguyên đoạn ST.")
-        hi = c_hi.number_input("Bỏ phần trên (Hz)", 5.0, hi_max, step=1.0, format="%.1f", key="cf_hi",
-                               help=f"40 Hz: chuẩn khi theo dõi, loại nhiễu cơ. Tối đa {hi_max:g} Hz với file này.")
+        lo = c_lo.number_input(t("Bỏ phần dưới (Hz)"), 0.05, 5.0, step=0.05, format="%.2f", key="cf_lo",
+                               help=t("0,5 Hz: làm phẳng đường nền. 0,05 Hz: giữ nguyên đoạn ST."))
+        hi = c_hi.number_input(t("Bỏ phần trên (Hz)"), 5.0, hi_max, step=1.0, format="%.1f", key="cf_hi",
+                               help=t("40 Hz: chuẩn khi theo dõi, loại nhiễu cơ. Tối đa {m} Hz với file này.", m=f"{hi_max:g}"))
         if lo >= hi:
-            st.error("Số ở ô \"Bỏ phần dưới\" phải nhỏ hơn ô \"Bỏ phần trên\".")
+            st.error(t("Số ở ô \"Bỏ phần dưới\" phải nhỏ hơn ô \"Bỏ phần trên\"."))
             st.stop()
-        nen = st.radio("Làm phẳng đường nền bằng", DS_NEN, key="cf_nen", format_func=lambda v: TEN_NEN[v],
-                       help="Đường nền trôi lên xuống do thở hoặc cử động. Wavelet bám nền tốt hơn khi trôi mạnh.")
+        st.radio(t("Làm phẳng đường nền bằng"), DS_NEN, key="cf_nen", format_func=lambda v: t(TEN_NEN[v]),
+                 help=t("Đường nền trôi lên xuống do thở hoặc cử động. Wavelet bám nền tốt hơn khi trôi mạnh."))
 
-        st.markdown("**② Lọc nhiễu điện lưới** · Notch")
-        notch = st.checkbox("Bật lọc nhiễu điện", key="cf_notch",
-                            help="Loại nhiễu từ ổ điện, đèn, máy móc xung quanh.")
+        st.markdown(t("**② Lọc nhiễu điện lưới** · Notch"))
+        notch = st.checkbox(t("Bật lọc nhiễu điện"), key="cf_notch",
+                            help=t("Loại nhiễu từ ổ điện, đèn, máy móc xung quanh."))
         c_f, c_q = st.columns(2)
-        f_notch = c_f.selectbox("Tần số điện", [50, 60], disabled=not notch, key="cf_fnotch",
-                                help="Việt Nam dùng điện 50 Hz.")
-        Q = c_q.number_input("Độ hẹp (Q)", 1.0, 100.0, step=1.0, disabled=not notch, key="cf_Q",
-                             help="Lớn hơn: chỉ cắt đúng tần số điện, ít ảnh hưởng tín hiệu tim.")
-        hai = st.checkbox("Lọc cả bội số (100, 150 Hz)", disabled=not notch, key="cf_hai")
+        c_f.selectbox(t("Tần số điện"), [50, 60], disabled=not notch, key="cf_fnotch", help=t("Việt Nam dùng điện 50 Hz."))
+        c_q.number_input(t("Độ hẹp (Q)"), 1.0, 100.0, step=1.0, disabled=not notch, key="cf_Q",
+                         help=t("Lớn hơn: chỉ cắt đúng tần số điện, ít ảnh hưởng tín hiệu tim."))
+        st.checkbox(t("Lọc cả bội số (100, 150 Hz)"), disabled=not notch, key="cf_hai")
 
-        st.markdown("**③ Làm mịn tín hiệu** · Wavelet")
-        wl_on = st.checkbox("Bật làm mịn", key="cf_wl", help="Giảm nhiễu cơ và nhiễu lăn tăn trên đường sóng.")
-        wavelet = st.selectbox("Dạng sóng mẫu", DS_WAVELET, key="cf_wavelet", disabled=not wl_on,
-                               help="sym8 và db4 có hình giống phức bộ QRS nên hợp với ECG.")
-        muc = st.slider("Mức làm mịn", 1, 8, disabled=not wl_on, key="cf_muc",
-                        help="Cao hơn: mịn hơn nhưng dễ mất sóng P, T. Mức 3–5 là hợp lý.")
+        st.markdown(t("**③ Làm mịn tín hiệu** · Wavelet"))
+        wl_on = st.checkbox(t("Bật làm mịn"), key="cf_wl", help=t("Giảm nhiễu cơ và nhiễu lăn tăn trên đường sóng."))
+        st.selectbox(t("Dạng sóng mẫu"), DS_WAVELET, key="cf_wavelet", disabled=not wl_on,
+                     help=t("sym8 và db4 có hình giống phức bộ QRS nên hợp với ECG."))
+        muc = st.slider(t("Mức làm mịn"), 1, 8, disabled=not wl_on, key="cf_muc",
+                        help=t("Cao hơn: mịn hơn nhưng dễ mất sóng P, T. Mức 3–5 là hợp lý."))
         if wl_on and fs / 2 ** (muc + 1) < 5:
-            st.warning("Mức làm mịn này có thể làm mất sóng P và T. Nên giảm xuống.")
-        nguong = st.selectbox("Độ mạnh", DS_NGUONG, disabled=not wl_on, key="cf_nguong",
-                              format_func=lambda v: TEN_NGUONG[v])
-        c_m, c_t = st.columns(2)
-        mem = c_m.radio("Kiểu làm mịn", DS_KIEU_NGUONG, disabled=not wl_on, key="cf_mem",
-                        format_func=lambda v: TEN_KIEU[v]) == DS_KIEU_NGUONG[0]
-        theo_muc = c_t.radio("Ước lượng nhiễu", DS_UOC_LUONG, disabled=not wl_on, key="cf_theomuc",
-                             format_func=lambda v: TEN_UOC[v]) == DS_UOC_LUONG[0]
-        cfg = dict(bac=bac, lo=float(lo), hi=float(hi), nen=nen, notch=notch, f_notch=f_notch, Q=float(Q),
-                   hai=hai, wl_on=wl_on, wavelet=wavelet, muc=muc, nguong=nguong, mem=mem, theo_muc=theo_muc)
-    chay = st.button("▶ Phân tích", type="primary", use_container_width=True) or ss_.pop("tu_chay", False)
+            st.warning(t("Mức làm mịn này có thể làm mất sóng P và T. Nên giảm xuống."))
+        st.selectbox(t("Độ mạnh"), DS_NGUONG, disabled=not wl_on, key="cf_nguong", format_func=lambda v: t(TEN_NGUONG[v]))
+        c_m, c_t2 = st.columns(2)
+        c_m.radio(t("Kiểu làm mịn"), DS_KIEU_NGUONG, disabled=not wl_on, key="cf_mem", format_func=lambda v: t(TEN_KIEU[v]))
+        c_t2.radio(t("Ước lượng nhiễu"), DS_UOC_LUONG, disabled=not wl_on, key="cf_theomuc",
+                   format_func=lambda v: t(TEN_UOC[v]))
+        cfg = cfg_tu_session(ss)
+    chay = st.button(t("▶ Phân tích"), type="primary", use_container_width=True) or ss.pop("tu_chay", False)
 
-ecg_raw = pd.to_numeric(df[col_ecg], errors="coerce").interpolate().bfill().values
-if don_vi.startswith("V"):
-    ecg_raw = ecg_raw * 1000
-elif don_vi.startswith("µV"):
-    ecg_raw = ecg_raw / 1000
-elif don_vi.startswith("ADC 12-bit"):
-    # 1 mức ADC = 3,3 V / 4095 tại ngõ vào ADC; chia hệ số khuếch đại 1100 để ra điện thế tại điện cực
-    ecg_raw = (ecg_raw - np.median(ecg_raw)) * 3300 / 4095 / 1100
-elif don_vi.startswith("ADC thô"):
-    ecg_raw = (ecg_raw - np.median(ecg_raw)) / (np.std(ecg_raw) or 1)
-
+ecg_raw = doi_don_vi(pd.to_numeric(df[col_ecg], errors="coerce").interpolate().bfill().values, don_vi)
 duration = len(ecg_raw) / fs
-ten_file = ",".join(sorted(f.name for f in files)) if nguon == "Tải file lên" else "du_lieu_mau"
 khoa_dau_vao = (ten_file, len(ecg_raw), col_ecg, fs, don_vi, method, tuple(sorted((cfg or {}).items())))
-ref = meta["ref"] if meta["ref"] is not None and (not meta["fs"] or fs == fs_default) else None
-if st.session_state.get("khoa") != khoa_dau_vao:   # đổi dữ liệu/tham số -> bỏ kết quả cũ
-    st.session_state.pop("kq", None)
+ref = meta["ref"] if meta["ref"] is not None and (not meta["fs"] or fs == int(round(meta["fs"]))) else None
+if ss.get("khoa") != khoa_dau_vao:
+    ss.pop("kq", None)
 
 # ----------------------------------------------------------------------------
-# 5. THÔNG TIN FILE
+# Thanh thông tin bệnh nhân
 # ----------------------------------------------------------------------------
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Số mẫu", f"{len(ecg_raw):,}")
-c2.metric("Tần số lấy mẫu", f"{fs} Hz")
-c3.metric("Thời lượng", f"{duration:.1f} s")
-c4.metric("Kênh phân tích", col_ecg)
+o_bn = [(t("Bệnh nhân"), ten), (t("Tuổi / Giới"), f"{tuoi} · {t(gioi)}"), (t("Đối tượng"), t(doi_tuong)),
+        (t("Dữ liệu"), (meta["mo_ta"] or ten_file) if nguon == "Tải file lên" else t("Dữ liệu mẫu (mô phỏng)")),
+        (t("Kênh"), col_ecg), (t("Ghi"), f"{duration:.1f} s · {fs} Hz"),
+        (t("Ngày"), datetime.now().strftime("%d/%m/%Y"))]
+khung_bn.markdown('<div class="ecg-patient">' + "".join(
+    f"<div><small>{html.escape(k)}</small><span>{html.escape(str(v))}</span></div>" for k, v in o_bn) + "</div>",
+    unsafe_allow_html=True)
+ve_buoc(1)
 
-with st.expander("Xem 10 dòng đầu của dữ liệu"):
-    st.dataframe(df.head(10), use_container_width=True)
+if chuyen_gia:
+    with st.expander(t("Xem 10 dòng đầu của dữ liệu")):
+        st.dataframe(df.head(10), use_container_width=True)
 
 # ----------------------------------------------------------------------------
-# 5b. ĐỀ XUẤT BỘ LỌC CHO FILE NÀY
+# Đề xuất bộ lọc cho file này
 # ----------------------------------------------------------------------------
 khoa_de_xuat = (ten_file, len(ecg_raw), col_ecg, fs, don_vi, doi_tuong, dung_sai)
-if st.session_state.pop("can_de_xuat", False):
-    with st.spinner("Đang phân tích phổ và chạy thử các phương pháp lọc..."):
-        st.session_state.de_xuat = dict(
-            khoa=khoa_de_xuat,
-            kq=de_xuat(ecg_raw, fs, thai_nhi, xu_ly_ecg, PP_TUY_CHINH,
-                       ref=ref, dung_sai_ms=dung_sai or 50))
-dx = st.session_state.get("de_xuat")
+if ss.pop("can_de_xuat", False):
+    with st.spinner(t("Đang phân tích phổ và chạy thử các phương pháp lọc...")):
+        ss.de_xuat = dict(khoa=khoa_de_xuat, kq=de_xuat(ecg_raw, fs, thai_nhi, xu_ly_ecg, PP_TUY_CHINH,
+                                                        ref=ref, dung_sai_ms=dung_sai or 50))
+dx = ss.get("de_xuat")
 if dx and dx["khoa"] == khoa_de_xuat:
     kqdx = dx["kq"]
     tot = next(r for r in kqdx["bang"] if "loi" not in r)
-    with st.expander("🧭 Đề xuất bộ lọc cho file này", expanded=True):
-        st.success(f"**Nên dùng: {ten_phuong_an(tot)}** · {tot['diem']:.0f}/100 điểm")
-        tieu_chi = ("chủ yếu dựa trên mức khớp với nhãn đỉnh R của bác sĩ đi kèm file" if kqdx["co_nhan"] else
-                    "nhịp rõ và đều, bắt nhịp đúng, giữ hình dạng sóng, sạch nhiễu")
-        st.caption(f"App đã thử 5 cách lọc trên {kqdx['doan_s']:.0f} giây đầu của bản ghi. Điểm {tieu_chi}.")
+    with st.expander(t("🧭 Đề xuất bộ lọc cho file này"), expanded=True):
+        st.success(t("**Nên dùng: {ten}** · {d}/100 điểm", ten=ten_phuong_an(tot), d=f"{tot['diem']:.0f}"))
+        tieu_chi = (t("chủ yếu dựa trên mức khớp với nhãn đỉnh R của bác sĩ đi kèm file") if kqdx["co_nhan"] else
+                    t("nhịp rõ và đều, bắt nhịp đúng, giữ hình dạng sóng, sạch nhiễu"))
+        st.caption(t("App đã thử 5 cách lọc trên {s} giây đầu của bản ghi. Điểm {tc}.",
+                     s=f"{kqdx['doan_s']:.0f}", tc=tieu_chi))
         hang = []
         for i, r in enumerate(kqdx["bang"], 1):
-            if "loi" in r:
-                hang.append({"Hạng": i, "Cách lọc": ten_phuong_an(r), "Điểm": 0, "Nhận xét": nhan_xet_phuong_phap(r)})
-                continue
-            d = {"Hạng": i, "Cách lọc": ten_phuong_an(r), "Điểm": round(r["diem"]),
-                 "Nhận xét": nhan_xet_phuong_phap(r),
-                 "Nhịp rõ, đều": f"{r['sqi'] * 100:.0f}%", "Bắt nhịp đúng": f"{r['rr'] * 100:.0f}%",
-                 "Giữ hình dạng sóng": f"{r['hinh_dang'] * 100:.0f}%", "Sạch nhiễu": f"{r['khu_nhieu'] * 100:.0f}%"}
-            if kqdx["co_nhan"]:
-                d["Khớp nhãn bác sĩ"] = f"{r['f1'] * 100:.1f}%"
+            d = {t("Hạng"): i, t("Cách lọc"): ten_phuong_an(r), t("Điểm"): 0 if "loi" in r else round(r["diem"]),
+                 t("Nhận xét"): nhan_xet_phuong_phap(r)}
+            if "loi" not in r and chuyen_gia:
+                d.update({t("Nhịp rõ, đều"): f"{r['sqi'] * 100:.0f}%", t("Bắt nhịp đúng"): f"{r['rr'] * 100:.0f}%",
+                          t("Giữ hình dạng sóng"): f"{r['hinh_dang'] * 100:.0f}%",
+                          t("Sạch nhiễu"): f"{r['khu_nhieu'] * 100:.0f}%"})
+            if "loi" not in r and kqdx["co_nhan"]:
+                d[t("Khớp nhãn bác sĩ")] = f"{r['f1'] * 100:.1f}%"
             hang.append(d)
         st.dataframe(pd.DataFrame(hang), use_container_width=True, hide_index=True)
-        st.markdown("**App nhận thấy gì về nhiễu của file này:**")
-        for l in kqdx["ly_do"]:
+        st.markdown(t("**App nhận thấy gì về nhiễu của file này:**"))
+        for l in cau_hinh_tu_dong(kqdx["pho"], fs, thai_nhi)[1]:
             st.markdown(f"- {l}")
-        ten_ds = [ten_phuong_an(r) for r in kqdx["bang"] if "loi" not in r]
+        ds_ok = [r for r in kqdx["bang"] if "loi" not in r]
         c_a, c_b = st.columns([3, 2])
-        chon = c_a.selectbox("Phương án áp dụng", ten_ds, index=0, label_visibility="collapsed")
-        r_chon = next(r for r in kqdx["bang"] if "loi" not in r and ten_phuong_an(r) == chon)
-        c_b.button("✅ Áp dụng và phân tích", type="primary", use_container_width=True,
-                   on_click=ap_dung_loc, args=(r_chon["method"], r_chon["cfg"]))
+        if ss.get("i_chon", 0) >= len(ds_ok):
+            ss["i_chon"] = 0
+        i_chon = c_a.selectbox(t("Phương án áp dụng"), range(len(ds_ok)), format_func=lambda i: ten_phuong_an(ds_ok[i]),
+                               label_visibility="collapsed", key="i_chon")
+        c_b.button(t("✅ Áp dụng và phân tích"), type="primary", use_container_width=True,
+                   on_click=ap_dung_loc, args=(ds_ok[i_chon]["method"], ds_ok[i_chon]["cfg"]))
 
-if not chay and "kq" not in st.session_state:
-    st.info("Bấm **▶ Phân tích** ở thanh bên để bắt đầu.")
+if not chay and "kq" not in ss:
+    st.info(t("Bấm **▶ Phân tích** ở thanh bên để bắt đầu."))
     st.stop()
 
 # ----------------------------------------------------------------------------
-# 6. PHÂN TÍCH
+# Phân tích
 # ----------------------------------------------------------------------------
-if chay or "kq" not in st.session_state:
-    with st.spinner("Đang lọc tín hiệu, tìm đỉnh R và tính chỉ số..."):
+if chay or "kq" not in ss:
+    with st.spinner(t("Đang lọc tín hiệu, tìm đỉnh R và tính chỉ số...")):
         try:
             ecg_clean, rpeaks, rr_ms, hr, quality = xu_ly_ecg(ecg_raw, fs, method, cfg)
         except Exception as e:
-            st.error(f"Lỗi khi phân tích: {e}")
+            st.error(t("Lỗi khi phân tích: {e}", e=e))
             st.stop()
         khoang = tinh_khoang_song(ecg_clean, rpeaks, fs)
         hrv = tinh_hrv(rpeaks, fs) if duration >= 30 else {}
-    st.session_state.kq = dict(ecg_clean=ecg_clean, rpeaks=rpeaks, rr_ms=rr_ms, hr=hr,
-                               quality=quality, khoang=khoang, hrv=hrv)
-    st.session_state.khoa = khoa_dau_vao
+    ss.kq = dict(ecg_clean=ecg_clean, rpeaks=rpeaks, rr_ms=rr_ms, hr=hr, quality=quality, khoang=khoang, hrv=hrv)
+    ss.khoa = khoa_dau_vao
+ve_buoc(3)
 
-kq = st.session_state.kq
+kq = ss.kq
 ecg_clean, rpeaks, rr_ms, hr = kq["ecg_clean"], kq["rpeaks"], kq["rr_ms"], kq["hr"]
 khoang, hrv, quality = kq["khoang"], kq["hrv"], kq["quality"]
 hr_mean = 60000 / np.mean(rr_ms)
-nhan_xet = danh_gia(hr_mean, rr_ms, khoang, thai_nhi)
 dc = doi_chieu(rpeaks, ref, fs, dung_sai) if ref is not None and len(ref) else None
 
-# ----------------------------------------------------------------------------
-# 7. HIỂN THỊ KẾT QUẢ
-# ----------------------------------------------------------------------------
-fs_chua_ro = col_time is None            # file không ghi tần số lấy mẫu, người dùng phải tự nhập
-ngoai_sinh_ly = not ((50 <= hr_mean <= 240) if thai_nhi else (35 <= hr_mean <= 200))
-dang_ngo = fs_chua_ro and not ((100 <= hr_mean <= 180) if thai_nhi else (45 <= hr_mean <= 120))
-if ngoai_sinh_ly or dang_ngo:
-    st.warning(
-        f"**Nhịp tim {hr_mean:.0f} l/p {'cao' if hr_mean > 100 else 'thấp'} bất thường, hãy kiểm tra tần số lấy mẫu.** "
-        + (f"File không ghi tần số lấy mẫu nên app đang dùng **{fs} Hz** như bạn nhập (mặc định 500 Hz). "
-           "Nếu con số này khác tần số thật của máy đo, nhịp tim và mọi khoảng thời gian đều sai theo cùng tỷ lệ."
-           if fs_chua_ro else "Tần số lấy mẫu đang dùng có thể chưa đúng."))
-    if fs_chua_ro:
-        cac_fs = [f for f in (125, 200, 250, 256, 360, 500, 1000) if f != fs]
-        st.caption("Ước tính nhịp tim nếu tần số lấy mẫu thật là: "
-                   + " · ".join(f"{f} Hz ≈ {hr_mean * f / fs:.0f} l/p" for f in cac_fs)
-                   + ". Hãy xem cấu hình máy đo (ví dụ chu kỳ đọc ADC trong code Arduino) để biết con số đúng.")
-if don_vi.startswith("ADC 12-bit"):
-    st.caption("Biên độ mV được quy đổi từ giá trị ADC theo giả định AD8232 (3,3 V, khuếch đại 1100), "
-               "chỉ mang tính ước lượng.")
-st.subheader("Kết quả chính")
-m1, m2, m3, m4, m5 = st.columns(5)
-m1.metric("Nhịp tim TB", f"{hr_mean:.0f} l/p")
-m2.metric("Nhịp tim min", f"{hr.min():.0f} l/p")
-m3.metric("Nhịp tim max", f"{hr.max():.0f} l/p")
-m4.metric("Số nhịp", f"{len(rpeaks)}")
-m5.metric("Chất lượng tín hiệu", "—" if not np.isfinite(quality) else f"{quality*100:.0f}%")
-
-if dc is not None:
-    st.subheader("🎯 Đối chiếu với nhãn chuẩn")
-    n1, n2, n3, n4 = st.columns(4)
-    n1.metric("Độ nhạy Se", f"{dc['Se']*100:.1f}%", help="Tỷ lệ nhãn chuẩn được app tìm thấy = TP/(TP+FN)")
-    n2.metric("Giá trị dự báo dương PPV", f"{dc['PPV']*100:.1f}%", help="Tỷ lệ đỉnh app tìm là đúng = TP/(TP+FP)")
-    n3.metric("F1", f"{dc['F1']*100:.1f}%")
-    n4.metric("Lệch thời gian TB", f"{dc['lech_ms']:.1f} ms")
-    st.caption(f"TP = {dc['TP']} · bỏ sót FN = {dc['FN']} · phát hiện thừa FP = {dc['FP']} · "
-               f"dung sai ±{dung_sai} ms · nhãn: {meta['nguon_nhan']}.")
-    if thai_nhi and "abdomen" in col_ecg.lower():
-        st.info("Kênh bụng mẹ (Abdomen) chứa cả ECG của mẹ (biên độ lớn) lẫn của thai nhi, nên thuật toán chủ yếu "
-                "bắt nhịp **mẹ**. Nhãn chuẩn là nhịp **thai**, vì vậy Se/PPV thấp là đúng bản chất tín hiệu. "
-                "Hãy chọn kênh **Direct_1** (điện cực đặt trên đầu thai nhi) để đánh giá thuật toán.")
-
-tab1, tab2, tab3, tab4, tab5 = st.tabs(
-    ["📈 Dải sóng ECG", "🧹 Trước/sau lọc", "❤️ Nhịp tim & HRV", "🩺 So sánh chỉ số", "📄 Báo cáo"]
-)
-
-with tab1:
-    max_start = max(0.0, duration - 10)
-    t_start = st.slider("Bắt đầu từ (s)", 0.0, float(max_start), 0.0, 0.5)
-    dur = st.select_slider("Độ dài đoạn hiển thị (s)", [5, 10], value=10)
-    fig_strip = fig_dai_song(ecg_clean, rpeaks, fs, t_start, min(dur, duration), ref)
-    st.pyplot(fig_strip)
-
-with tab2:
-    fig_loc = fig_truoc_sau_loc(ecg_raw, ecg_clean, fs)
-    st.pyplot(fig_loc)
-    st.caption(f"Cách lọc đang dùng: {mo_ta_loc(method, cfg)}")
-    fig_pho_ = fig_pho(ecg_raw, ecg_clean, fs)
-    st.pyplot(fig_pho_)
-    fig_dap_ung_ = None
-    if method == PP_TUY_CHINH:
-        fig_dap_ung_ = fig_dap_ung(fs, cfg)
-        st.pyplot(fig_dap_ung_)
-        st.caption("Đường cong cho biết dải tần được giữ lại (gần 0 dB) và dải bị loại bỏ. Phần làm mịn wavelet "
-                   "không thể hiện ở đây; xem hiệu quả của nó ở biểu đồ phổ phía trên.")
-
-with tab3:
-    fig_hr = fig_nhip_tim(rpeaks, hr, fs, nguong_nhip(thai_nhi))
-    st.pyplot(fig_hr)
-    fig_rr_ = fig_rr(rr_ms)
-    st.pyplot(fig_rr_)
-    if not hrv:
-        st.warning("Tín hiệu ngắn hơn 30 s nên không tính HRV. Nên ghi tối thiểu 5 phút cho HRV ngắn hạn.")
-
-# Bảng chỉ số tổng hợp
-rows = [
-    ("Nhịp tim trung bình (l/p)", fmt(hr_mean, 0)),
-    ("Nhịp tim min / max (l/p)", f"{hr.min():.0f} / {hr.max():.0f}"),
-    ("RR trung bình (ms)", fmt(np.mean(rr_ms), 0)),
-]
-rows += [(k, fmt(v, 0)) for k, v in khoang.items()]
-rows += [(k, fmt(v, 1)) for k, v in hrv.items()]
-if dc is not None:
-    rows += [("Đối chiếu nhãn chuẩn: Se (%)", fmt(dc["Se"] * 100, 1)),
-             ("Đối chiếu nhãn chuẩn: PPV (%)", fmt(dc["PPV"] * 100, 1)),
-             ("Đối chiếu nhãn chuẩn: F1 (%)", fmt(dc["F1"] * 100, 1)),
-             ("Đối chiếu nhãn chuẩn: TP / FN / FP", f"{dc['TP']} / {dc['FN']} / {dc['FP']}")]
-bang = pd.DataFrame(rows, columns=["Chỉ số", "Giá trị"])
-
-# ---- So sánh với khoảng tham chiếu (giải thích kiểu SHAP) ----
 ty_le_lech = float(np.mean(np.abs(np.diff(rr_ms)) / rr_ms[:-1] > 0.2)) if len(rr_ms) > 2 else 0.0
 if thai_nhi:
-    gia_tri = {"Nhịp tim thai cơ bản": float(np.median(hr)),
-               "Biến thiên nhịp tim thai": bien_thien_nhip_thai(rpeaks, fs)}
+    gia_tri = {"Nhịp tim thai cơ bản": float(np.median(hr)), "Biến thiên nhịp tim thai": bien_thien_nhip_thai(rpeaks, fs)}
 else:
     gia_tri = {"Nhịp tim": hr_mean, "PR": khoang.get("PR (ms)", np.nan), "QRS": khoang.get("QRS (ms)", np.nan),
                "QTc (Bazett)": khoang.get("QTc Bazett (ms)", np.nan),
                "SDNN": hrv.get("SDNN (ms)", np.nan), "RMSSD": hrv.get("RMSSD (ms)", np.nan)}
 dong_ss = danh_gia_chi_so(gia_tri, thai_nhi, gioi, quality, duration, ty_le_lech)
+theo_ten = {r["ten"]: r for r in dong_ss}
 luu_y = diem_luu_y(dong_ss)
+n_ngoai = sum(r["trang_thai"] in ("Cao", "Thấp") for r in dong_ss)
+n_danh_gia = sum(r["trang_thai"] != "Không đánh giá" for r in dong_ss)
+muc_sqi = ("Tốt" if quality >= 0.85 else "Trung bình" if quality >= 0.7 else "Kém") if np.isfinite(quality) else None
+
+# ----------------------------------------------------------------------------
+# Cảnh báo tần số lấy mẫu
+# ----------------------------------------------------------------------------
+ngoai_sinh_ly = not ((50 <= hr_mean <= 240) if thai_nhi else (35 <= hr_mean <= 200))
+dang_ngo = fs_chua_ro and not ((100 <= hr_mean <= 180) if thai_nhi else (45 <= hr_mean <= 120))
+if ngoai_sinh_ly or dang_ngo:
+    st.warning(
+        t("**Nhịp tim {hr} l/p cao bất thường, hãy kiểm tra tần số lấy mẫu.** " if hr_mean > 100 else
+          "**Nhịp tim {hr} l/p thấp bất thường, hãy kiểm tra tần số lấy mẫu.** ", hr=f"{hr_mean:.0f}")
+        + (t("File không ghi tần số lấy mẫu nên app đang dùng **{fs} Hz** (theo thiết bị/ô nhập). "
+             "Nếu con số này khác tần số thật của máy đo, nhịp tim và mọi khoảng thời gian đều sai theo cùng tỷ lệ.",
+             fs=fs) if fs_chua_ro else t("Tần số lấy mẫu đang dùng có thể chưa đúng.")))
+    if fs_chua_ro:
+        cac_fs = [f for f in (125, 200, 250, 256, 360, 500, 1000) if f != fs]
+        st.caption(t("Ước tính nhịp tim nếu tần số lấy mẫu thật là: ")
+                   + " · ".join(f"{f} Hz ≈ {hr_mean * f / fs:.0f} " + t("l/p") for f in cac_fs)
+                   + t(". Hãy xem cấu hình máy đo (ví dụ chu kỳ đọc ADC trong code Arduino) để biết con số đúng."))
+if don_vi.startswith("ADC 1"):
+    st.caption(t("Biên độ mV được quy đổi từ giá trị ADC theo giả định AD8232 (khuếch đại 1100), chỉ mang tính ước lượng."))
+
+# ----------------------------------------------------------------------------
+# Thẻ chỉ số chính
+# ----------------------------------------------------------------------------
+r_hr = theo_ten.get("Nhịp tim thai cơ bản" if thai_nhi else "Nhịp tim")
+band = nguong_nhip(thai_nhi)
+mau_hr = MAU.get(r_hr["trang_thai"], "#9e9e9e")
+the_html = [
+    the(t("Nhịp tim thai cơ bản") if thai_nhi else t("Nhịp tim trung bình"),
+        f"{r_hr['x']:.0f}", t("l/p"), f"{t(r_hr['trang_thai'])} · {band[0]}–{band[1]}", mau_hr,
+        svg_sparkline(hr, band)),
+    the(t("Thấp nhất / cao nhất"), f"{hr.min():.0f}–{hr.max():.0f}", t("l/p"), t("nhịp tức thời"), "#0b5c7a"),
+    the(t("Số nhịp"), f"{len(rpeaks)}", "", t("trong {s} s ghi", s=f"{duration:.0f}"), "#0b5c7a"),
+    the(t("Chất lượng tín hiệu"), "—" if muc_sqi is None else f"{quality * 100:.0f}", "%",
+        t(muc_sqi) if muc_sqi else t("không đánh giá được"), MAU_TIN_CAY.get(muc_sqi, "#9e9e9e")),
+    the(t("Ngoài khoảng tham chiếu"), f"{n_ngoai}", f"/ {n_danh_gia}",
+        t("xem tab So sánh chỉ số") if n_ngoai else t("tất cả trong khoảng"),
+        "#c62828" if n_ngoai else "#2e7d32"),
+]
+st.markdown('<div class="ecg-cards">' + "".join(the_html) + "</div>", unsafe_allow_html=True)
+
+if dc is not None:
+    st.subheader(t("🎯 Đối chiếu với nhãn chuẩn"))
+    n1, n2, n3, n4 = st.columns(4)
+    n1.metric(t("Độ nhạy Se"), f"{dc['Se']*100:.1f}%", help=t("Tỷ lệ nhãn chuẩn được app tìm thấy = TP/(TP+FN)"))
+    n2.metric(t("Giá trị dự báo dương PPV"), f"{dc['PPV']*100:.1f}%", help=t("Tỷ lệ đỉnh app tìm là đúng = TP/(TP+FP)"))
+    n3.metric("F1", f"{dc['F1']*100:.1f}%")
+    n4.metric(t("Lệch thời gian TB"), f"{dc['lech_ms']:.1f} ms")
+    st.caption(t("TP = {tp} · bỏ sót FN = {fn} · phát hiện thừa FP = {fp} · dung sai ±{ds} ms · nhãn: {src}.",
+                 tp=dc["TP"], fn=dc["FN"], fp=dc["FP"], ds=dung_sai, src=meta["nguon_nhan"]))
+    if thai_nhi and "abdomen" in col_ecg.lower():
+        st.info(t("Kênh bụng mẹ (Abdomen) chứa cả ECG của mẹ (biên độ lớn) lẫn của thai nhi, nên thuật toán chủ yếu "
+                  "bắt nhịp **mẹ**. Nhãn chuẩn là nhịp **thai**, vì vậy Se/PPV thấp là đúng bản chất tín hiệu. "
+                  "Hãy chọn kênh **Direct_1** (điện cực đặt trên đầu thai nhi) để đánh giá thuật toán."))
+
+tab1, tab2, tab3, tab4, tab5 = st.tabs([t("📈 Dải sóng ECG"), t("🧹 Trước/sau lọc"), t("❤️ Nhịp tim & HRV"),
+                                        t("🩺 So sánh chỉ số"), t("📄 Báo cáo")])
+
+with tab1:
+    c_s, c_d = st.columns([4, 1])
+    max_start = max(0.0, duration - 10)
+    ss["t_start"] = min(float(ss.get("t_start", 0.0)), float(max_start))
+    ss.setdefault("hien_s", 10)
+    t_start = (c_s.slider(t("Bắt đầu từ (s)"), 0.0, float(max_start), step=0.5, key="t_start")
+               if max_start > 0 else 0.0)
+    hien_s = c_d.select_slider(t("Khung nhìn (s)"), [5, 10, 20, 30], key="hien_s")
+    try:
+        t0 = 0.0 if duration <= 120 else max(0.0, t_start - 10)
+        t1 = duration if duration <= 120 else min(duration, t_start + 60)
+        fig_tt = plotly_dai_song(ecg_clean, rpeaks, fs, t0, t1, ref, hien_s)
+        fig_tt.update_xaxes(range=[t_start, min(t_start + hien_s, t1)])
+        st.plotly_chart(fig_tt, use_container_width=True,
+                        config={"scrollZoom": True, "displaylogo": False,
+                                "modeBarButtonsToRemove": ["lasso2d", "select2d", "autoScale2d"]})
+        st.caption(t("Kéo để dời theo thời gian · cuộn chuột hoặc kéo trên trục để phóng to · nhấp đúp để về khung ban đầu · "
+                     "rê chuột lên chấm xanh để xem nhịp tim tức thời.")
+                   + (" " + t("Tam giác đỏ: nhãn chuẩn.") if ref is not None else ""))
+    except ImportError:
+        st.info(t("Chưa cài plotly nên hiển thị dải sóng tĩnh."))
+    fig_strip = fig_dai_song(ecg_clean, rpeaks, fs, t_start, min(10, duration), ref)
+    with st.expander(t("Dải sóng chuẩn 25 mm/s, 10 mm/mV (bản in trong báo cáo)")):
+        st.pyplot(fig_strip)
+
+with tab2:
+    fig_loc = fig_truoc_sau_loc(ecg_raw, ecg_clean, fs)
+    st.pyplot(fig_loc)
+    st.caption(t("Cách lọc đang dùng: {m}", m=mo_ta_loc(method, cfg)))
+    fig_pho_, fig_dap_ung_ = fig_pho(ecg_raw, ecg_clean, fs), None
+    if chuyen_gia:
+        st.pyplot(fig_pho_)
+        if method == PP_TUY_CHINH:
+            fig_dap_ung_ = fig_dap_ung(fs, cfg)
+            st.pyplot(fig_dap_ung_)
+            st.caption(t("Đường cong cho biết dải tần được giữ lại (gần 0 dB) và dải bị loại bỏ. Phần làm mịn wavelet "
+                         "không thể hiện ở đây; xem hiệu quả của nó ở biểu đồ phổ phía trên."))
+    else:
+        st.caption(t("Bật Chế độ chuyên gia để xem phổ tần số trước/sau lọc."))
+
+with tab3:
+    fig_hr = fig_nhip_tim(rpeaks, hr, fs, band)
+    st.pyplot(fig_hr)
+    fig_rr_ = fig_rr(rr_ms)
+    st.pyplot(fig_rr_)
+    if not hrv:
+        st.warning(t("Tín hiệu ngắn hơn 30 s nên không tính HRV. Nên ghi tối thiểu 5 phút cho HRV ngắn hạn."))
+
+# Bảng số liệu đo chi tiết
+rows = [(t("Nhịp tim trung bình (l/p)"), fmt(hr_mean, 0)),
+        (t("Nhịp tim min / max (l/p)"), f"{hr.min():.0f} / {hr.max():.0f}"),
+        (t("RR trung bình (ms)"), fmt(np.mean(rr_ms), 0))]
+rows += [(k, fmt(v, 0)) for k, v in khoang.items()]
+rows += [(k, fmt(v, 1)) for k, v in hrv.items()]
+if dc is not None:
+    rows += [(t("Đối chiếu nhãn chuẩn") + ": Se (%)", fmt(dc["Se"] * 100, 1)),
+             (t("Đối chiếu nhãn chuẩn") + ": PPV (%)", fmt(dc["PPV"] * 100, 1)),
+             (t("Đối chiếu nhãn chuẩn") + ": F1 (%)", fmt(dc["F1"] * 100, 1)),
+             (t("Đối chiếu nhãn chuẩn") + ": TP / FN / FP", f"{dc['TP']} / {dc['FN']} / {dc['FP']}")]
+bang = pd.DataFrame(rows, columns=[t("Chỉ số"), t("Giá trị")])
+C_DG = t("Đánh giá")
 bang_ss = pd.DataFrame([{
-    "Chỉ số": r["ten"], "Giá trị": "—" if not np.isfinite(r["x"]) else f"{so(r['x'])} {r['dv']}",
-    "Khoảng tham chiếu": khoang_str(r), "Đánh giá": r["trang_thai"], "Độ tin cậy đo": r["tin_cay"],
-    "Đóng góp SHAP": round(r["phi"], 2), "Nguồn tham chiếu": r["nguon"]} for r in dong_ss])
+    t("Chỉ số"): t(r["ten"]), t("Giá trị"): "—" if not np.isfinite(r["x"]) else f"{so(r['x'])} {t(r['dv'])}",
+    t("Khoảng tham chiếu"): khoang_str(r), C_DG: t(r["trang_thai"]), t("Độ tin cậy đo"): t(r["tin_cay"]),
+    t("Đóng góp SHAP"): round(r["phi"], 2), t("Nguồn tham chiếu"): t(r["nguon"])} for r in dong_ss])
 
 with tab4:
-    st.info("Phần này **không đưa ra chẩn đoán**. Mỗi chỉ số được đặt cạnh khoảng tham chiếu đã công bố "
-            "để bác sĩ đánh giá nhanh; kết luận lâm sàng thuộc về bác sĩ.", icon="🩺")
-    n_ngoai = sum(r["trang_thai"] in ("Cao", "Thấp") for r in dong_ss)
-    n_danh_gia = sum(r["trang_thai"] != "Không đánh giá" for r in dong_ss)
+    st.info(t("Phần này **không đưa ra chẩn đoán**. Mỗi chỉ số được đặt cạnh khoảng tham chiếu đã công bố "
+              "để bác sĩ đánh giá nhanh; kết luận lâm sàng thuộc về bác sĩ."), icon="🩺")
     k1, k2, k3 = st.columns(3)
-    k1.metric("Chỉ số trong khoảng tham chiếu", f"{n_danh_gia - n_ngoai}/{n_danh_gia}")
-    k2.metric("Chỉ số ngoài khoảng", n_ngoai)
-    k3.metric("Điểm lệch tổng hợp", f"{sum(r['phi'] for r in dong_ss):.2f}",
-              help="0 = mọi chỉ số nằm trong khoảng tham chiếu. Không phải điểm nguy cơ.")
-
+    k1.metric(t("Chỉ số trong khoảng tham chiếu"), f"{n_danh_gia - n_ngoai}/{n_danh_gia}")
+    k2.metric(t("Chỉ số ngoài khoảng"), n_ngoai)
+    k3.metric(t("Điểm lệch tổng hợp"), f"{sum(r['phi'] for r in dong_ss):.2f}",
+              help=t("0 = mọi chỉ số nằm trong khoảng tham chiếu. Không phải điểm nguy cơ."))
     fig_ref = fig_khoang_tham_chieu(dong_ss)
     st.pyplot(fig_ref)
-
-    st.markdown("**Chỉ số nào đóng góp vào mức lệch?** (biểu đồ thác nước kiểu SHAP)")
+    st.markdown(t("**Chỉ số nào đóng góp vào mức lệch?** (biểu đồ thác nước kiểu SHAP)"))
     fig_shap_ = fig_shap(dong_ss)
     st.pyplot(fig_shap_)
-    with st.expander("Cách đọc biểu đồ SHAP và độ tin cậy"):
-        st.markdown(
+    with st.expander(t("Cách đọc biểu đồ SHAP và độ tin cậy")):
+        st.markdown(t(
             "- Biểu đồ bắt đầu từ **giá trị nền 0**, nghĩa là mọi chỉ số nằm trong khoảng tham chiếu. Mỗi thanh "
             "là phần đóng góp của một chỉ số; cộng dồn lại ra **điểm lệch tổng hợp**.\n"
             "- Đóng góp = mức lệch chuẩn hoá ra ngoài khoảng (1 = lệch thêm một đoạn bằng độ rộng khoảng, tối đa 2) "
@@ -942,61 +563,71 @@ with tab4:
             "phần đóng góp của nó, không phải ước lượng như khi giải thích mô hình học máy hộp đen.\n"
             "- **Độ tin cậy đo** dựa trên chất lượng tín hiệu (SQI). Các khoảng PR/QRS/QTc đo từ hình thái sóng nên "
             "được hạ một bậc. HRV cần bản ghi ≥ 5 phút và ít nhịp lệch.\n"
-            "- Đỏ = cao hơn khoảng tham chiếu, xanh dương = thấp hơn, xám = trong khoảng.")
+            "- Đỏ = cao hơn khoảng tham chiếu, xanh dương = thấp hơn, xám = trong khoảng."))
 
-    st.markdown("**Bảng so sánh**")
-    to_mau = lambda v: {"Cao": "color:#c62828;font-weight:600", "Thấp": "color:#1565c0;font-weight:600",
-                        "Bình thường": "color:#2e7d32"}.get(v, "")
+    st.markdown(t("**Bảng so sánh**"))
+    mau_dg = {t("Cao"): "color:#c62828;font-weight:600", t("Thấp"): "color:#1565c0;font-weight:600",
+              t("Bình thường"): "color:#2e7d32"}
     try:
-        sty = bang_ss.style.map(to_mau, subset=["Đánh giá"])
+        sty = bang_ss.style.map(lambda v: mau_dg.get(v, ""), subset=[C_DG])
     except AttributeError:
-        sty = bang_ss.style.applymap(to_mau, subset=["Đánh giá"])
-    sty = sty.format({"Đóng góp SHAP": "{:.2f}"})
-    st.dataframe(sty, use_container_width=True, hide_index=True)
+        sty = bang_ss.style.applymap(lambda v: mau_dg.get(v, ""), subset=[C_DG])
+    st.dataframe(sty.format({t("Đóng góp SHAP"): "{:.2f}"}), use_container_width=True, hide_index=True)
 
-    st.markdown("**Các điểm cần bác sĩ lưu ý**")
-    if luu_y:
-        for l in luu_y:
-            st.markdown(f"- {l}")
-    else:
-        st.markdown("- Tất cả chỉ số đánh giá được đều nằm trong khoảng tham chiếu.")
+    st.markdown(t("**Các điểm cần bác sĩ lưu ý**"))
+    for l in luu_y or [t("Tất cả chỉ số đánh giá được đều nằm trong khoảng tham chiếu.")]:
+        st.markdown(f"- {l}")
     if thai_nhi:
-        st.caption("Bản ghi thai nhi: chỉ so sánh nhịp tim thai cơ bản và biến thiên theo FIGO; "
-                   "không đánh giá PR/QRS/QT theo ngưỡng người lớn.")
+        st.caption(t("Bản ghi thai nhi: chỉ so sánh nhịp tim thai cơ bản và biến thiên theo FIGO; "
+                     "không đánh giá PR/QRS/QT theo ngưỡng người lớn."))
     elif tuoi < 18:
-        st.caption("Khoảng tham chiếu đang dùng là của người lớn; trẻ em có ngưỡng khác theo lứa tuổi.")
+        st.caption(t("Khoảng tham chiếu đang dùng là của người lớn; trẻ em có ngưỡng khác theo lứa tuổi."))
 
-    df_beats = pd.DataFrame({
-        "Nhịp số": np.arange(1, len(rr_ms) + 1),
-        "Thời điểm R (s)": np.round(rpeaks[1:] / fs, 3),
-        "RR (ms)": np.round(rr_ms, 1),
-        "Nhịp tim (l/p)": np.round(hr, 1),
-    })
-    with st.expander("Số liệu đo chi tiết"):
+    df_beats = pd.DataFrame({t("Nhịp số"): np.arange(1, len(rr_ms) + 1),
+                             t("Thời điểm R (s)"): np.round(rpeaks[1:] / fs, 3),
+                             "RR (ms)": np.round(rr_ms, 1), t("Nhịp tim (l/p)"): np.round(hr, 1)})
+    with st.expander(t("Số liệu đo chi tiết")):
         st.dataframe(bang, use_container_width=True, hide_index=True)
         st.dataframe(df_beats, use_container_width=True, hide_index=True, height=250)
     d1, d2, d3 = st.columns(3)
-    d1.download_button("⬇ Bảng so sánh (CSV)", bang_ss.to_csv(index=False).encode("utf-8-sig"),
+    d1.download_button(t("⬇ Bảng so sánh (CSV)"), bang_ss.to_csv(index=False).encode("utf-8-sig"),
                        "so_sanh_chi_so.csv", "text/csv", use_container_width=True)
-    d2.download_button("⬇ Số liệu đo (CSV)", bang.to_csv(index=False).encode("utf-8-sig"),
+    d2.download_button(t("⬇ Số liệu đo (CSV)"), bang.to_csv(index=False).encode("utf-8-sig"),
                        "chi_so_ecg.csv", "text/csv", use_container_width=True)
-    d3.download_button("⬇ Từng nhịp (CSV)", df_beats.to_csv(index=False).encode("utf-8-sig"),
+    d3.download_button(t("⬇ Từng nhịp (CSV)"), df_beats.to_csv(index=False).encode("utf-8-sig"),
                        "tung_nhip_ecg.csv", "text/csv", use_container_width=True)
 
 with tab5:
+    bay_gio = datetime.now()
     thong_tin = {
-        "Bệnh nhân": ten, "Tuổi": tuoi, "Giới tính": gioi,
-        "Ngày phân tích": datetime.now().strftime("%d/%m/%Y %H:%M"),
-        "Đối tượng": doi_tuong, "Dữ liệu": f"{ten_file} · kênh {col_ecg}",
-        "Tần số lấy mẫu": f"{fs} Hz", "Thời lượng ghi": f"{duration:.1f} s",
-        "Phương pháp lọc": mo_ta_loc(method, cfg),
+        t("Họ tên / mã"): ten, t("Tuổi"): tuoi, t("Giới tính"): t(gioi), t("Đối tượng"): t(doi_tuong),
+        t("Dữ liệu"): ten_file if nguon == "Tải file lên" else t("Dữ liệu mẫu (mô phỏng)"), t("Kênh"): col_ecg,
+        t("Thiết bị đo"): t(thiet_bi) if THIET_BI.get(thiet_bi) else (meta["mo_ta"] or "—"),
+        t("Tần số lấy mẫu"): f"{fs} Hz", t("Thời lượng ghi"): f"{duration:.1f} s",
+        t("Phương pháp lọc"): mo_ta_loc(method, cfg),
+        "_ma": "ECG-" + bay_gio.strftime("%y%m%d-%H%M"), "_ngay": bay_gio.strftime("%d/%m/%Y %H:%M"),
     }
-    st.write("Báo cáo gồm thông tin bệnh nhân, bảng so sánh với khoảng tham chiếu, các điểm cần lưu ý, "
-             "biểu đồ SHAP, dải sóng ECG và các biểu đồ khác. Có ô trống để bác sĩ ghi kết luận.")
-    figs_pdf = [fig_ref, fig_shap_, fig_strip, fig_loc, fig_pho_] + ([fig_dap_ung_] if fig_dap_ung_ is not None else []) + [fig_hr, fig_rr_]
-    bang_pdf = bang_ss[["Chỉ số", "Giá trị", "Khoảng tham chiếu", "Đánh giá", "Độ tin cậy đo"]]
-    pdf = tao_pdf(thong_tin, bang_pdf, luu_y, figs_pdf)
-    st.download_button("⬇ Tải báo cáo PDF", pdf, f"bao_cao_ecg_{ten.replace(' ', '_')}.pdf",
+    if thai_nhi:
+        r_bt = theo_ten["Biến thiên nhịp tim thai"]
+        kpi = [(t("Nhịp tim thai cơ bản"), fmt(r_hr["x"], 0), t("l/p"), r_hr["trang_thai"]),
+               (t("Biến thiên nhịp tim thai"), "—" if not np.isfinite(r_bt["x"]) else so(r_bt["x"]), t("l/p"),
+                r_bt["trang_thai"]),
+               (t("Số nhịp"), str(len(rpeaks)), "", None),
+               (t("Chất lượng tín hiệu"), "—" if muc_sqi is None else f"{quality * 100:.0f}", "%", None)]
+    else:
+        kpi = [(t("Nhịp tim TB"), fmt(hr_mean, 0), t("l/p"), r_hr["trang_thai"])]
+        for k in ("PR", "QRS", "QTc (Bazett)"):
+            r = theo_ten[k]
+            kpi.append((t(k), fmt(r["x"], 0), "ms", r["trang_thai"]))
+        kpi.append((t("Chất lượng tín hiệu"), "—" if muc_sqi is None else f"{quality * 100:.0f}", "%", None))
+    st.markdown(t("Trang đầu là **phiếu kết quả** khổ A4: thông tin bệnh nhân, ô chỉ số chính, dải sóng 10 giây, bảng so "
+                  "sánh với khoảng tham chiếu, các điểm cần lưu ý và ô để bác sĩ ghi kết luận, ký tên. Các trang sau là "
+                  "biểu đồ chi tiết."))
+    figs_pdf = ([fig_ref, fig_shap_, fig_strip, fig_loc] + ([fig_pho_] if chuyen_gia else [])
+                + ([fig_dap_ung_] if fig_dap_ung_ is not None else []) + [fig_hr, fig_rr_])
+    pdf = tao_pdf(thong_tin, kpi, dong_ss, luu_y,
+                  dict(ecg=ecg_clean, rpeaks=rpeaks, fs=fs, t0=t_start, ref=ref), figs_pdf)
+    st.download_button(t("⬇ Tải báo cáo PDF"), pdf, f"bao_cao_ecg_{ten.replace(' ', '_')}.pdf",
                        "application/pdf", type="primary", use_container_width=True)
 
 plt.close("all")

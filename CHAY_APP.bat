@@ -38,7 +38,7 @@ if errorlevel 1 (
 
 echo.
 echo Kiem tra thu vien...
-venv312\Scripts\python.exe -c "import numpy, pandas, scipy, matplotlib, neurokit2, streamlit; print('OK - pandas', pandas.__version__, '- streamlit', streamlit.__version__)"
+venv312\Scripts\python.exe -c "import numpy, pandas, scipy, matplotlib, neurokit2, streamlit, plotly, bioread; print('OK - pandas', pandas.__version__, '- streamlit', streamlit.__version__)"
 if errorlevel 1 (
   echo.
   echo [LOI] Windows dang chan file thu vien ^(Smart App Control^).

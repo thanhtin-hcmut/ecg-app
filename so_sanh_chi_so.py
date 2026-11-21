@@ -18,6 +18,8 @@ from __future__ import annotations
 import matplotlib.pyplot as plt
 import numpy as np
 
+from i18n import t
+
 HE_SO_TIN_CAY = {"Tốt": 1.0, "Trung bình": 0.7, "Kém": 0.4}
 MAU = {"Bình thường": "#2e7d32", "Cao": "#c62828", "Thấp": "#1565c0", "Không đánh giá": "#9e9e9e"}
 
@@ -37,7 +39,7 @@ def khoang_tham_chieu(thai_nhi: bool, gioi: str) -> dict:
         "Nhịp tim": (60, 100, "l/p", "AHA – nhịp xoang khi nghỉ"),
         "PR": (120, 200, "ms", "AHA/ACCF/HRS 2009"),
         "QRS": (None, 110, "ms", "AHA/ACCF/HRS 2009 (≥ 110 ms: rối loạn dẫn truyền trong thất)"),
-        "QTc (Bazett)": (350, qtc_tren, "ms", f"AHA/ACCF/HRS 2009 ({gioi.lower()} ≤ {qtc_tren} ms)"),
+        "QTc (Bazett)": (350, qtc_tren, "ms", t("AHA/ACCF/HRS 2009 ({g} ≤ {q} ms)", g=t(gioi).lower(), q=qtc_tren)),
         "SDNN": (32, 93, "ms", "Nunan 2010 – HRV ngắn hạn 5 phút khi nghỉ"),
         "RMSSD": (19, 75, "ms", "Nunan 2010 – HRV ngắn hạn 5 phút khi nghỉ"),
     }
@@ -118,11 +120,12 @@ def so(x) -> str:
 
 
 def khoang_str(r) -> str:
+    dv = t(r["dv"])
     if r["lo"] is None:
-        return f"≤ {r['hi']:g} {r['dv']}"
+        return f"≤ {r['hi']:g} {dv}"
     if r["hi"] is None:
-        return f"≥ {r['lo']:g} {r['dv']}"
-    return f"{r['lo']:g}–{r['hi']:g} {r['dv']}"
+        return f"≥ {r['lo']:g} {dv}"
+    return f"{r['lo']:g}–{r['hi']:g} {dv}"
 
 
 def diem_luu_y(dong: list[dict]) -> list[str]:
@@ -130,8 +133,10 @@ def diem_luu_y(dong: list[dict]) -> list[str]:
     out = []
     for r in sorted(dong, key=lambda r: -r["phi"]):
         if r["trang_thai"] in ("Cao", "Thấp"):
-            out.append(f"{r['ten']} = {so(r['x'])} {r['dv']}, {'cao hơn' if r['trang_thai'] == 'Cao' else 'thấp hơn'} "
-                       f"khoảng tham chiếu {khoang_str(r)} (độ tin cậy phép đo: {r['tin_cay'].lower()}).")
+            out.append(t("{ten} = {x} {dv}, cao hơn khoảng tham chiếu {k} (độ tin cậy phép đo: {tc})."
+                         if r["trang_thai"] == "Cao" else
+                         "{ten} = {x} {dv}, thấp hơn khoảng tham chiếu {k} (độ tin cậy phép đo: {tc}).",
+                         ten=t(r["ten"]), x=so(r["x"]), dv=t(r["dv"]), k=khoang_str(r), tc=t(r["tin_cay"]).lower()))
     return out
 
 
@@ -152,7 +157,7 @@ def fig_khoang_tham_chieu(dong: list[dict]):
         else:
             ax.barh(y, 1, left=0, height=0.42, color="#c8e6c9", edgecolor="#81c784")
         if not np.isfinite(r["x"]):
-            ax.text(0.5, y, "không đo được", ha="center", va="center", fontsize=9, color="#757575")
+            ax.text(0.5, y, t("không đo được"), ha="center", va="center", fontsize=9, color="#757575")
         else:
             lo = r["lo"] if r["lo"] is not None else r["hi"] - 0.2 * r["hi"] * 2.5
             hi = r["hi"] if r["hi"] is not None else r["lo"] + 0.2 * r["lo"] * 2.5
@@ -166,16 +171,16 @@ def fig_khoang_tham_chieu(dong: list[dict]):
                     weight="bold")
         ax.text(2.02, y, khoang_str(r), va="center", fontsize=8.5, color="#424242")
     ax.set_yticks(range(n))
-    ax.set_yticklabels([f"{r['ten']} ({r['dv']})" for r in dong[::-1]], fontsize=10)
+    ax.set_yticklabels([f"{t(r['ten'])} ({t(r['dv'])})" for r in dong[::-1]], fontsize=10)
     ax.set_xlim(-1, 2)
     ax.set_xticks([-1, 0, 1, 2])
-    ax.set_xticklabels(["thấp hơn", "cận dưới", "cận trên", "cao hơn"], fontsize=8.5)
+    ax.set_xticklabels([t("thấp hơn"), t("cận dưới"), t("cận trên"), t("cao hơn")], fontsize=8.5)
     ax.axvline(0, color="#81c784", lw=0.8)
     ax.axvline(1, color="#81c784", lw=0.8)
     ax.set_ylim(-0.6, n - 0.3)
     for s in ("top", "right", "left"):
         ax.spines[s].set_visible(False)
-    ax.set_title("Giá trị đo so với khoảng tham chiếu (dải xanh)", fontsize=11, loc="left")
+    ax.set_title(t("Giá trị đo so với khoảng tham chiếu (dải xanh)"), fontsize=11, loc="left")
     fig.tight_layout()
     return fig
 
@@ -196,12 +201,12 @@ def fig_shap(dong: list[dict]):
             ax.plot([cong_don + r["phi"]] * 2, [i + 0.3, i + 0.7], color="#757575", lw=0.7)
         cong_don += r["phi"]
     ax.set_yticks(range(len(ds)))
-    ax.set_yticklabels([f"{r['ten']} = {so(r['x'])} {r['dv']}" if np.isfinite(r["x"]) else f"{r['ten']} = —"
+    ax.set_yticklabels([f"{t(r['ten'])} = {so(r['x'])} {t(r['dv'])}" if np.isfinite(r["x"]) else f"{t(r['ten'])} = —"
                         for r in ds], fontsize=9.5)
     ax.axvline(0, color="#424242", lw=0.8)
     ax.set_xlim(0, max(tong * 1.25, 1))
-    ax.set_xlabel("Đóng góp vào điểm lệch (giá trị SHAP)")
-    ax.set_title(f"Mức đóng góp của từng chỉ số · giá trị nền E[f] = 0 → điểm lệch tổng hợp f(x) = {tong:.2f}",
+    ax.set_xlabel(t("Đóng góp vào điểm lệch (giá trị SHAP)"))
+    ax.set_title(t("Mức đóng góp của từng chỉ số · giá trị nền E[f] = 0 → điểm lệch tổng hợp f(x) = {v}", v=f"{tong:.2f}"),
                  fontsize=11, loc="left")
     for s in ("top", "right"):
         ax.spines[s].set_visible(False)
