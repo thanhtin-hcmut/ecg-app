@@ -914,6 +914,7 @@ with tab4:
         sty = bang_ss.style.map(to_mau, subset=["Đánh giá"])
     except AttributeError:
         sty = bang_ss.style.applymap(to_mau, subset=["Đánh giá"])
+    sty = sty.format({"Đóng góp SHAP": "{:.2f}"})
     st.dataframe(sty, use_container_width=True, hide_index=True)
 
     st.markdown("**Các điểm cần bác sĩ lưu ý**")
