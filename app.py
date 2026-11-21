@@ -51,7 +51,7 @@ st.markdown("""
 html, body, .stApp, .stMarkdown, p, li, label, h1, h2, h3, h4, input, textarea, button, td, th,
 [data-testid="stMetricValue"], [data-testid="stMetricLabel"], [data-baseweb="tab"], [data-baseweb="select"] div {
   font-family: 'Be Vietnam Pro', 'Segoe UI', sans-serif; }
-.block-container { padding-top: 1.4rem; max-width: 1360px; }
+.block-container { padding-top: 3.2rem; max-width: 1360px; }
 [data-testid="stSidebar"] { background: #f2f6f8; border-right: 1px solid #dbe3e8; }
 [data-testid="stSidebar"] h2 { font-size: 0.95rem; letter-spacing: .02em; color: #0b5c7a; margin-top: .6rem;
   padding-top: .6rem; border-top: 1px solid #dbe3e8; }
@@ -91,10 +91,9 @@ html, body, .stApp, .stMarkdown, p, li, label, h1, h2, h3, h4, input, textarea, 
 """, unsafe_allow_html=True)
 
 with st.sidebar:
-    c_l, c_e = st.columns([1, 1])
-    c_l.radio("🌐", ["vi", "en"], key="lang", horizontal=True, label_visibility="collapsed",
-              format_func=lambda v: {"vi": "Tiếng Việt", "en": "English"}[v])
-    c_e.toggle(t("Chế độ chuyên gia"), key="chuyen_gia",
+    st.radio("🌐", ["vi", "en"], key="lang", horizontal=True, label_visibility="collapsed",
+             format_func=lambda v: {"vi": "🇻🇳 Tiếng Việt", "en": "🇬🇧 English"}[v])
+    st.toggle(t("Chế độ chuyên gia"), key="chuyen_gia",
                help=t("Bật để chỉnh chi tiết bộ lọc, xem phổ tần số và các thông số kỹ thuật."))
 chuyen_gia = ss["chuyen_gia"]
 
