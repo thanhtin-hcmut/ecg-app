@@ -138,6 +138,33 @@ DS_WAVELET = ["sym8", "sym4", "db4", "db6", "coif3"]
 DS_NGUONG = ["Universal (VisuShrink)", "Bayes (BayesShrink)"]
 DS_KIEU_NGUONG = ["Mềm (soft)", "Cứng (hard)"]
 DS_UOC_LUONG = ["Theo từng mức", "Một mức chung"]
+# Tên và mô tả ngắn gọn cho người đọc lâm sàng: (phù hợp khi nào, lưu ý, tên thuật toán)
+TEN_PP = {"neurokit": "Tiêu chuẩn (mặc định)", "biosppy": "Giữ hình dạng sóng",
+          "pantompkins1985": "Đếm nhịp – gọn nhẹ", "hamilton2002": "Đếm nhịp – ít nhiễu chen",
+          PP_TUY_CHINH: "Tự chỉnh"}
+GIOI_THIEU_PP = {
+    "neurokit": ("Ổn định, dùng tốt cho hầu hết bản ghi.",
+                 "Đỉnh R thấp đi một chút sau khi lọc.", "NeuroKit2"),
+    "biosppy": ("Sóng P, QRS, T rõ nét nhất. Nên chọn khi cần đo PR, QRS, QT.",
+                "Bản ghi nhiều nhiễu cơ thì đường sóng còn hơi gợn.", "BioSPPy"),
+    "pantompkins1985": ("Thuật toán kinh điển, gọn nhẹ. Hợp để đếm nhịp và tính nhịp tim.",
+                        "Làm mất sóng P, T: không dùng để đo PR, QT.", "Pan-Tompkins 1985"),
+    "hamilton2002": ("Dải lọc hẹp hơn nên ít nhiễu chen vào. Hợp để đếm nhịp.",
+                     "Làm mất sóng P, T: không dùng để đo PR, QT.", "Hamilton 2002"),
+    PP_TUY_CHINH: ("Tự chọn từng bước lọc, dành cho người cần chỉnh chi tiết.",
+                   "Chỉnh không hợp lý có thể làm méo sóng. Nên bấm Đề xuất trước.",
+                   "Butterworth + Notch + Wavelet"),
+}
+TEN_NEN = {DS_NEN[0]: "Bộ lọc thông thường", DS_NEN[1]: "Wavelet (tốt khi nền trôi mạnh)"}
+TEN_NGUONG = {DS_NGUONG[0]: "Mạnh (Universal)", DS_NGUONG[1]: "Nhẹ, giữ chi tiết (Bayes)"}
+TEN_KIEU = {DS_KIEU_NGUONG[0]: "Mềm (mượt hơn)", DS_KIEU_NGUONG[1]: "Cứng (giữ biên độ)"}
+TEN_UOC = {DS_UOC_LUONG[0]: "Từng mức", DS_UOC_LUONG[1]: "Một mức chung"}
+
+
+def ten_phuong_an(r: dict) -> str:
+    return "Tự chỉnh riêng cho file này" if r["method"] == PP_TUY_CHINH else TEN_PP.get(r["method"], r["ten"])
+
+
 MAC_DINH_LOC = dict(method="neurokit", cf_bac=4, cf_lo=0.5, cf_hi=40.0, cf_nen=DS_NEN[0], cf_notch=True,
                     cf_fnotch=50, cf_Q=30.0, cf_hai=False, cf_wl=True, cf_wavelet="sym8", cf_muc=4,
                     cf_nguong=DS_NGUONG[0], cf_mem=DS_KIEU_NGUONG[0], cf_theomuc=DS_UOC_LUONG[0])
@@ -218,19 +245,17 @@ def loc_tuy_chinh(x: np.ndarray, fs: int, cfg: dict) -> np.ndarray:
 
 
 def mo_ta_loc(method: str, cfg: dict) -> str:
+    """Mô tả ngắn gọn, dễ hiểu bộ lọc đang dùng (hiện trên màn hình và trong báo cáo PDF)."""
     if method != PP_TUY_CHINH:
-        return method
-    s = []
+        return f"{TEN_PP.get(method, method)} ({GIOI_THIEU_PP.get(method, ('', '', method))[2]})"
+    s = [f"giữ dải {cfg['lo']:g}–{cfg['hi']:g} Hz"]
     if cfg["nen"].startswith("Wavelet"):
-        s.append(f"khử nền wavelet (<{cfg['lo']:g} Hz) + Butterworth thông thấp bậc {cfg['bac']}, {cfg['hi']:g} Hz")
-    else:
-        s.append(f"Butterworth thông dải bậc {cfg['bac']}, {cfg['lo']:g}–{cfg['hi']:g} Hz")
+        s.append("làm phẳng nền bằng wavelet")
     if cfg["notch"]:
-        s.append(f"Notch {cfg['f_notch']} Hz (Q={cfg['Q']:g}{', kèm hài' if cfg['hai'] else ''})")
+        s.append(f"lọc nhiễu điện {cfg['f_notch']} Hz")
     if cfg["wl_on"]:
-        s.append(f"wavelet {cfg['wavelet']} mức {cfg['muc']}, ngưỡng {cfg['nguong'].split(' ')[0]} "
-                 f"{'mềm' if cfg['mem'] else 'cứng'}")
-    return "; ".join(s)
+        s.append("làm mịn wavelet")
+    return "Tự chỉnh: " + ", ".join(s)
 
 
 def xu_ly_ecg(ecg_raw: np.ndarray, fs: int, method: str, cfg: dict | None = None):
@@ -637,48 +662,51 @@ with st.sidebar:
 
     st.button("🧭 Đề xuất bộ lọc cho file này", use_container_width=True,
               on_click=lambda: ss_.update(can_de_xuat=True),
-              help="Phân tích phổ của file, chạy thử mọi phương pháp lọc và xếp hạng theo tiêu chí khách quan.")
-    method = st.selectbox("Phương pháp lọc", DS_PHUONG_PHAP, key="method")
+              help="App tự thử mọi cách lọc trên file này và gợi ý cách tốt nhất (mất vài giây).")
+    method = st.selectbox("Phương pháp lọc", DS_PHUONG_PHAP, key="method", format_func=lambda m: TEN_PP[m])
+    phu_hop, luu_y_pp, thuat_toan = GIOI_THIEU_PP[method]
+    st.caption(f"✅ {phu_hop}  \n⚠️ {luu_y_pp}  \nThuật toán: {thuat_toan}")
     cfg = None
     if method == PP_TUY_CHINH:
-        st.markdown("**Butterworth**")
-        bac = st.slider("Bậc lọc", 1, 8, key="cf_bac",
-                        help="Bậc càng cao, sườn cắt càng dốc nhưng dễ gây dao động (ringing) quanh QRS.")
+        st.markdown("**① Giữ dải tần của tim** · Butterworth")
+        bac = st.slider("Độ dứt khoát khi cắt (bậc)", 1, 8, key="cf_bac",
+                        help="Cao hơn: cắt gọn hơn nhưng dễ tạo gợn quanh QRS. Bậc 2–4 là đủ cho ECG.")
         c_lo, c_hi = st.columns(2)
-        lo = c_lo.number_input("Cắt dưới (Hz)", 0.05, 5.0, step=0.05, format="%.2f", key="cf_lo",
-                               help="0,5 Hz khử trôi nền; 0,05 Hz giữ nguyên đoạn ST (chuẩn chẩn đoán).")
-        hi = c_hi.number_input("Cắt trên (Hz)", 5.0, hi_max, step=1.0, format="%.1f", key="cf_hi",
-                               help=f"Phải nhỏ hơn tần số Nyquist = fs/2 = {nyq:g} Hz.")
+        lo = c_lo.number_input("Bỏ phần dưới (Hz)", 0.05, 5.0, step=0.05, format="%.2f", key="cf_lo",
+                               help="0,5 Hz: làm phẳng đường nền. 0,05 Hz: giữ nguyên đoạn ST.")
+        hi = c_hi.number_input("Bỏ phần trên (Hz)", 5.0, hi_max, step=1.0, format="%.1f", key="cf_hi",
+                               help=f"40 Hz: chuẩn khi theo dõi, loại nhiễu cơ. Tối đa {hi_max:g} Hz với file này.")
         if lo >= hi:
-            st.error("Tần số cắt dưới phải nhỏ hơn tần số cắt trên.")
+            st.error("Số ở ô \"Bỏ phần dưới\" phải nhỏ hơn ô \"Bỏ phần trên\".")
             st.stop()
-        nen = st.radio("Khử trôi đường nền bằng", DS_NEN, key="cf_nen",
-                       help="Wavelet: phân tách tín hiệu, bỏ thành phần tần thấp dưới tần số cắt dưới.")
+        nen = st.radio("Làm phẳng đường nền bằng", DS_NEN, key="cf_nen", format_func=lambda v: TEN_NEN[v],
+                       help="Đường nền trôi lên xuống do thở hoặc cử động. Wavelet bám nền tốt hơn khi trôi mạnh.")
 
-        st.markdown("**Notch điện lưới**")
-        notch = st.checkbox("Bật Notch", key="cf_notch")
+        st.markdown("**② Lọc nhiễu điện lưới** · Notch")
+        notch = st.checkbox("Bật lọc nhiễu điện", key="cf_notch",
+                            help="Loại nhiễu từ ổ điện, đèn, máy móc xung quanh.")
         c_f, c_q = st.columns(2)
-        f_notch = c_f.selectbox("Tần số", [50, 60], disabled=not notch, key="cf_fnotch",
-                                help="Việt Nam dùng điện lưới 50 Hz.")
-        Q = c_q.number_input("Hệ số Q", 1.0, 100.0, step=1.0, disabled=not notch, key="cf_Q",
-                             help="Q lớn → khấc cắt hẹp, ít ảnh hưởng tín hiệu lân cận.")
-        hai = st.checkbox("Cắt cả hài bậc 2, 3", disabled=not notch, key="cf_hai")
+        f_notch = c_f.selectbox("Tần số điện", [50, 60], disabled=not notch, key="cf_fnotch",
+                                help="Việt Nam dùng điện 50 Hz.")
+        Q = c_q.number_input("Độ hẹp (Q)", 1.0, 100.0, step=1.0, disabled=not notch, key="cf_Q",
+                             help="Lớn hơn: chỉ cắt đúng tần số điện, ít ảnh hưởng tín hiệu tim.")
+        hai = st.checkbox("Lọc cả bội số (100, 150 Hz)", disabled=not notch, key="cf_hai")
 
-        st.markdown("**Khử nhiễu Wavelet (DWT)**")
-        wl_on = st.checkbox("Bật khử nhiễu wavelet", key="cf_wl")
-        wavelet = st.selectbox("Wavelet mẹ", DS_WAVELET, key="cf_wavelet",
-                               help="sym8 / db4 có hình dạng gần giống phức bộ QRS nên hay dùng cho ECG.")
-        muc = st.slider("Số mức phân tách", 1, 8, disabled=not wl_on, key="cf_muc",
-                        help=f"Mức j chứa dải ≈ {fs/2**2:g}–{fs/2:g} Hz ở mức 1, mỗi mức giảm một nửa. "
-                             "Mức quá sâu sẽ làm méo QRS.")
+        st.markdown("**③ Làm mịn tín hiệu** · Wavelet")
+        wl_on = st.checkbox("Bật làm mịn", key="cf_wl", help="Giảm nhiễu cơ và nhiễu lăn tăn trên đường sóng.")
+        wavelet = st.selectbox("Dạng sóng mẫu", DS_WAVELET, key="cf_wavelet", disabled=not wl_on,
+                               help="sym8 và db4 có hình giống phức bộ QRS nên hợp với ECG.")
+        muc = st.slider("Mức làm mịn", 1, 8, disabled=not wl_on, key="cf_muc",
+                        help="Cao hơn: mịn hơn nhưng dễ mất sóng P, T. Mức 3–5 là hợp lý.")
         if wl_on and fs / 2 ** (muc + 1) < 5:
-            st.warning(f"Mức {muc} chạm tới dải {fs/2**(muc+1):.1f}–{fs/2**muc:.1f} Hz, nơi chứa sóng P và T. "
-                       "Ngưỡng hoá ở đây có thể xoá mất P/T; nên giảm số mức.")
-        nguong = st.selectbox("Quy tắc ngưỡng", DS_NGUONG, disabled=not wl_on, key="cf_nguong")
+            st.warning("Mức làm mịn này có thể làm mất sóng P và T. Nên giảm xuống.")
+        nguong = st.selectbox("Độ mạnh", DS_NGUONG, disabled=not wl_on, key="cf_nguong",
+                              format_func=lambda v: TEN_NGUONG[v])
         c_m, c_t = st.columns(2)
-        mem = c_m.radio("Kiểu ngưỡng", DS_KIEU_NGUONG, disabled=not wl_on, key="cf_mem") == DS_KIEU_NGUONG[0]
-        theo_muc = c_t.radio("Ước lượng nhiễu", DS_UOC_LUONG, disabled=not wl_on,
-                             key="cf_theomuc") == DS_UOC_LUONG[0]
+        mem = c_m.radio("Kiểu làm mịn", DS_KIEU_NGUONG, disabled=not wl_on, key="cf_mem",
+                        format_func=lambda v: TEN_KIEU[v]) == DS_KIEU_NGUONG[0]
+        theo_muc = c_t.radio("Ước lượng nhiễu", DS_UOC_LUONG, disabled=not wl_on, key="cf_theomuc",
+                             format_func=lambda v: TEN_UOC[v]) == DS_UOC_LUONG[0]
         cfg = dict(bac=bac, lo=float(lo), hi=float(hi), nen=nen, notch=notch, f_notch=f_notch, Q=float(Q),
                    hai=hai, wl_on=wl_on, wavelet=wavelet, muc=muc, nguong=nguong, mem=mem, theo_muc=theo_muc)
     chay = st.button("▶ Phân tích", type="primary", use_container_width=True) or ss_.pop("tu_chay", False)
@@ -728,32 +756,30 @@ if dx and dx["khoa"] == khoa_de_xuat:
     kqdx = dx["kq"]
     tot = next(r for r in kqdx["bang"] if "loi" not in r)
     with st.expander("🧭 Đề xuất bộ lọc cho file này", expanded=True):
-        st.success(f"**Đề xuất: {tot['ten']}** · điểm {tot['diem']:.1f}/100 · nhịp tim {tot['nhip']:.0f} l/p · "
-                   f"{tot['so_nhip']} nhịp trong {kqdx['doan_s']:.0f} s đầu")
-        tieu_chi = ("F1 so với nhãn chuẩn (80%) + điểm chất lượng (20%)" if kqdx["co_nhan"] else
-                    "chất lượng tín hiệu 35% · nhịp hợp lý 25% · giữ hình dạng sóng 25% · khử nhiễu 15%")
-        st.caption(f"Cách chấm điểm: {tieu_chi}. Đánh giá trên {kqdx['doan_s']:.0f} s đầu của tín hiệu.")
+        st.success(f"**Nên dùng: {ten_phuong_an(tot)}** · {tot['diem']:.0f}/100 điểm")
+        tieu_chi = ("chủ yếu dựa trên mức khớp với nhãn đỉnh R của bác sĩ đi kèm file" if kqdx["co_nhan"] else
+                    "nhịp rõ và đều, bắt nhịp đúng, giữ hình dạng sóng, sạch nhiễu")
+        st.caption(f"App đã thử 5 cách lọc trên {kqdx['doan_s']:.0f} giây đầu của bản ghi. Điểm {tieu_chi}.")
         hang = []
         for i, r in enumerate(kqdx["bang"], 1):
             if "loi" in r:
-                hang.append({"Hạng": i, "Phương pháp": r["ten"], "Điểm": 0, "Nhận xét": nhan_xet_phuong_phap(r)})
+                hang.append({"Hạng": i, "Cách lọc": ten_phuong_an(r), "Điểm": 0, "Nhận xét": nhan_xet_phuong_phap(r)})
                 continue
-            d = {"Hạng": i, "Phương pháp": r["ten"], "Điểm": round(r["diem"], 1),
-                 "Chất lượng (SQI)": round(r["sqi"] * 100), "Nhịp hợp lý (%)": round(r["rr"] * 100),
-                 "Giữ hình dạng (%)": round(r["hinh_dang"] * 100), "Khử nhiễu (%)": round(r["khu_nhieu"] * 100)}
+            d = {"Hạng": i, "Cách lọc": ten_phuong_an(r), "Điểm": round(r["diem"]),
+                 "Nhận xét": nhan_xet_phuong_phap(r),
+                 "Nhịp rõ, đều": f"{r['sqi'] * 100:.0f}%", "Bắt nhịp đúng": f"{r['rr'] * 100:.0f}%",
+                 "Giữ hình dạng sóng": f"{r['hinh_dang'] * 100:.0f}%", "Sạch nhiễu": f"{r['khu_nhieu'] * 100:.0f}%"}
             if kqdx["co_nhan"]:
-                d["F1 so với nhãn (%)"] = round(r["f1"] * 100, 1)
-            d["Nhịp tim (l/p)"] = round(r["nhip"])
-            d["Nhận xét"] = nhan_xet_phuong_phap(r)
+                d["Khớp nhãn bác sĩ"] = f"{r['f1'] * 100:.1f}%"
             hang.append(d)
         st.dataframe(pd.DataFrame(hang), use_container_width=True, hide_index=True)
-        st.markdown("**Cấu hình tùy chỉnh được sinh riêng cho file này dựa trên phổ tín hiệu:**")
+        st.markdown("**App nhận thấy gì về nhiễu của file này:**")
         for l in kqdx["ly_do"]:
             st.markdown(f"- {l}")
-        ten_ds = [r["ten"] for r in kqdx["bang"] if "loi" not in r]
+        ten_ds = [ten_phuong_an(r) for r in kqdx["bang"] if "loi" not in r]
         c_a, c_b = st.columns([3, 2])
         chon = c_a.selectbox("Phương án áp dụng", ten_ds, index=0, label_visibility="collapsed")
-        r_chon = next(r for r in kqdx["bang"] if r["ten"] == chon)
+        r_chon = next(r for r in kqdx["bang"] if "loi" not in r and ten_phuong_an(r) == chon)
         c_b.button("✅ Áp dụng và phân tích", type="primary", use_container_width=True,
                    on_click=ap_dung_loc, args=(r_chon["method"], r_chon["cfg"]))
 
@@ -829,15 +855,15 @@ with tab1:
 with tab2:
     fig_loc = fig_truoc_sau_loc(ecg_raw, ecg_clean, fs)
     st.pyplot(fig_loc)
-    st.caption(f"Phương pháp lọc: {mo_ta_loc(method, cfg)}")
+    st.caption(f"Cách lọc đang dùng: {mo_ta_loc(method, cfg)}")
     fig_pho_ = fig_pho(ecg_raw, ecg_clean, fs)
     st.pyplot(fig_pho_)
     fig_dap_ung_ = None
     if method == PP_TUY_CHINH:
         fig_dap_ung_ = fig_dap_ung(fs, cfg)
         st.pyplot(fig_dap_ung_)
-        st.caption("Đáp ứng trên chỉ gồm phần lọc tuyến tính; khử nhiễu wavelet là phi tuyến nên không có "
-                   "đáp ứng tần số cố định, xem hiệu quả của nó trên phổ công suất.")
+        st.caption("Đường cong cho biết dải tần được giữ lại (gần 0 dB) và dải bị loại bỏ. Phần làm mịn wavelet "
+                   "không thể hiện ở đây; xem hiệu quả của nó ở biểu đồ phổ phía trên.")
 
 with tab3:
     fig_hr = fig_nhip_tim(rpeaks, hr, fs, nguong_nhip(thai_nhi))

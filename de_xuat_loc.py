@@ -62,28 +62,28 @@ def cau_hinh_tu_dong(pho: dict, fs: float, thai_nhi: bool) -> tuple[dict, list[s
     # Dải thông: ECG thai nhi có QRS hẹp, nhiều năng lượng tần cao hơn người lớn
     hi = min(70.0 if thai_nhi else 40.0, round(0.45 * fs))
     lo = 1.0 if thai_nhi else 0.5
-    ly_do.append(f"Dải thông {lo:g}–{hi:g} Hz: " + ("QRS thai nhi hẹp, cần giữ thành phần tần cao hơn."
-                                                     if thai_nhi else "dải chuẩn cho theo dõi ECG người lớn."))
+    ly_do.append(f"Giữ dải {lo:g}–{hi:g} Hz: " + ("phức bộ QRS của thai nhi hẹp, cần giữ thêm tần số cao."
+                                                   if thai_nhi else "dải chuẩn khi theo dõi điện tim người lớn."))
 
     nen = "Wavelet (bỏ thành phần xấp xỉ)" if pho["nen"] > 0.3 else "Butterworth thông cao"
-    ly_do.append(f"Trôi đường nền chiếm {pho['nen']*100:.0f}% công suất → "
-                 + ("khử nền bằng wavelet (bám nền tốt hơn khi trôi mạnh)." if nen.startswith("Wavelet")
-                    else "Butterworth thông cao là đủ."))
+    ly_do.append((f"Đường nền trôi nhiều ({pho['nen']*100:.0f}% năng lượng tín hiệu) → làm phẳng bằng wavelet."
+                  if nen.startswith("Wavelet") else
+                  f"Đường nền trôi ít ({pho['nen']*100:.0f}% năng lượng tín hiệu) → bộ lọc thông thường là đủ."))
 
     notch = pho["do_noi_luoi"] > 3 and pho["f_luoi"] < 0.99 * nyq
     hai = notch and pho["hai_luoi"] > 3
     if notch:
-        ly_do.append(f"Có đỉnh nhiễu điện lưới {pho['f_luoi']} Hz cao gấp {pho['do_noi_luoi']:.0f} lần nền → bật Notch"
-                     + (" kèm hài." if hai else "."))
+        ly_do.append(f"Có nhiễu điện lưới {pho['f_luoi']} Hz rõ rệt → bật lọc nhiễu điện"
+                     + (" (cả bội số 100, 150 Hz)." if hai else "."))
     else:
-        ly_do.append("Không thấy đỉnh nhiễu điện lưới rõ → tắt Notch để không cắt thêm tín hiệu.")
+        ly_do.append("Không thấy nhiễu điện lưới → không cần lọc 50 Hz, tránh cắt bớt tín hiệu.")
 
     wl_on = pho["tan_cao"] > 0.02
     # Mức wavelet sâu nhất vẫn nằm trên ~8 Hz để không xoá sóng P/T
     muc = int(np.clip(np.floor(np.log2(fs / 8)) - 1, 1, 6))
-    ly_do.append(f"Nhiễu tần cao (>40 Hz) chiếm {pho['tan_cao']*100:.1f}% công suất → "
-                 + (f"bật khử nhiễu wavelet sym8, {muc} mức (dải sâu nhất ≥ {fs/2**(muc+1):.0f} Hz)."
-                    if wl_on else "không cần khử nhiễu wavelet."))
+    ly_do.append((f"Có nhiễu cơ, nhiễu lăn tăn ({pho['tan_cao']*100:.1f}%) → bật làm mịn wavelet mức {muc}."
+                  if wl_on else
+                  f"Ít nhiễu cơ ({pho['tan_cao']*100:.1f}%) → không cần làm mịn."))
 
     cfg = dict(bac=4, lo=float(lo), hi=float(hi), nen=nen, notch=bool(notch), f_notch=int(pho["f_luoi"]),
                Q=30.0, hai=bool(hai), wl_on=bool(wl_on), wavelet="sym8", muc=muc,
@@ -169,7 +169,7 @@ def de_xuat(x, fs, thai_nhi, xu_ly_ecg, pp_tuy_chinh, ref=None, dung_sai_ms=50, 
         ("biosppy", None, "biosppy"),
         ("pantompkins1985", None, "pantompkins1985"),
         ("hamilton2002", None, "hamilton2002"),
-        (pp_tuy_chinh, cfg_auto, "Tùy chỉnh – tự động cho file này"),
+        (pp_tuy_chinh, cfg_auto, "Tự chỉnh riêng cho file này"),
     ]
     bang = []
     for method, cfg, ten in ung_vien:
@@ -195,16 +195,16 @@ def de_xuat(x, fs, thai_nhi, xu_ly_ecg, pp_tuy_chinh, ref=None, dung_sai_ms=50, 
 
 
 def nhan_xet_phuong_phap(r: dict) -> str:
-    """Giải thích ngắn vì sao một phương pháp được/không được đề xuất."""
+    """Nhận xét ngắn, dễ hiểu vì sao một cách lọc được hoặc không được đề xuất."""
     if "loi" in r:
         return "Không chạy được trên file này."
     yeu = []
     if r["hinh_dang"] < 0.8:
-        yeu.append("làm méo hình dạng sóng (mất P/T)")
+        yeu.append("làm mất sóng P/T")
     if r["rr"] < 0.9:
-        yeu.append("nhiều khoảng RR bất thường (bỏ sót hoặc bắt nhầm đỉnh R)")
+        yeu.append("bỏ sót hoặc bắt nhầm một số nhịp")
     if r["sqi"] < 0.6:
-        yeu.append("các nhịp sau lọc kém đồng nhất")
+        yeu.append("các nhịp sau lọc không đồng đều")
     if r["khu_nhieu"] < 0.7:
-        yeu.append("còn nhiều nhiễu ngoài dải ECG")
-    return ("Điểm yếu: " + "; ".join(yeu) + ".") if yeu else "Cân bằng tốt giữa khử nhiễu và giữ hình dạng sóng."
+        yeu.append("còn nhiều nhiễu")
+    return ("Lưu ý: " + ", ".join(yeu) + ".") if yeu else "Tốt: sạch nhiễu mà vẫn giữ hình dạng sóng."
