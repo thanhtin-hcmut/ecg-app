@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from de_xuat_loc import de_xuat, nhan_xet_phuong_phap
 from doc_physionet import doc_edf, doc_nhan_wfdb, doc_wfdb
 
 # ----------------------------------------------------------------------------
@@ -129,6 +130,29 @@ def doi_chieu(det, ref, fs, dung_sai_ms):
 
 
 PP_TUY_CHINH = "Tùy chỉnh (Butterworth + Notch + Wavelet)"
+DS_PHUONG_PHAP = ["neurokit", "biosppy", "pantompkins1985", "hamilton2002", PP_TUY_CHINH]
+DS_NEN = ["Butterworth thông cao", "Wavelet (bỏ thành phần xấp xỉ)"]
+DS_WAVELET = ["sym8", "sym4", "db4", "db6", "coif3"]
+DS_NGUONG = ["Universal (VisuShrink)", "Bayes (BayesShrink)"]
+DS_KIEU_NGUONG = ["Mềm (soft)", "Cứng (hard)"]
+DS_UOC_LUONG = ["Theo từng mức", "Một mức chung"]
+MAC_DINH_LOC = dict(method="neurokit", cf_bac=4, cf_lo=0.5, cf_hi=40.0, cf_nen=DS_NEN[0], cf_notch=True,
+                    cf_fnotch=50, cf_Q=30.0, cf_hai=False, cf_wl=True, cf_wavelet="sym8", cf_muc=4,
+                    cf_nguong=DS_NGUONG[0], cf_mem=DS_KIEU_NGUONG[0], cf_theomuc=DS_UOC_LUONG[0])
+
+
+def ap_dung_loc(method: str, cfg: dict | None):
+    """Ghi phương pháp/cấu hình được chọn vào các ô điều khiển ở thanh bên rồi tự phân tích lại."""
+    ss_ = st.session_state
+    ss_["method"] = method
+    if cfg:
+        ss_.update(cf_bac=int(cfg["bac"]), cf_lo=float(cfg["lo"]), cf_hi=float(cfg["hi"]), cf_nen=cfg["nen"],
+                   cf_notch=bool(cfg["notch"]), cf_fnotch=int(cfg["f_notch"]), cf_Q=float(cfg["Q"]),
+                   cf_hai=bool(cfg["hai"]), cf_wl=bool(cfg["wl_on"]), cf_wavelet=cfg["wavelet"],
+                   cf_muc=int(cfg["muc"]), cf_nguong=cfg["nguong"],
+                   cf_mem=DS_KIEU_NGUONG[0] if cfg["mem"] else DS_KIEU_NGUONG[1],
+                   cf_theomuc=DS_UOC_LUONG[0] if cfg["theo_muc"] else DS_UOC_LUONG[1])
+    ss_["tu_chay"] = True
 
 
 def _nguong_wavelet(d, sigma, kieu):
@@ -594,53 +618,60 @@ with st.sidebar:
                                   "nên thường dùng 50 ms.")
 
     st.header("4. Bộ lọc")
-    method = st.selectbox("Phương pháp lọc", ["neurokit", "biosppy", "pantompkins1985", "hamilton2002",
-                                              PP_TUY_CHINH])
+    ss_ = st.session_state
+    for k, v in MAC_DINH_LOC.items():          # giá trị mặc định (dùng session_state để nút "Áp dụng" ghi đè được)
+        ss_.setdefault(k, v)
+    nyq = fs / 2
+    hi_max = float(np.floor(nyq * 0.99 * 10) / 10)
+    ss_["cf_hi"] = min(float(ss_["cf_hi"]), hi_max)
+
+    st.button("🧭 Đề xuất bộ lọc cho file này", use_container_width=True,
+              on_click=lambda: ss_.update(can_de_xuat=True),
+              help="Phân tích phổ của file, chạy thử mọi phương pháp lọc và xếp hạng theo tiêu chí khách quan.")
+    method = st.selectbox("Phương pháp lọc", DS_PHUONG_PHAP, key="method")
     cfg = None
     if method == PP_TUY_CHINH:
-        nyq = fs / 2
         st.markdown("**Butterworth**")
-        bac = st.slider("Bậc lọc", 1, 8, 4,
+        bac = st.slider("Bậc lọc", 1, 8, key="cf_bac",
                         help="Bậc càng cao, sườn cắt càng dốc nhưng dễ gây dao động (ringing) quanh QRS.")
         c_lo, c_hi = st.columns(2)
-        lo = c_lo.number_input("Cắt dưới (Hz)", 0.05, 5.0, 0.5, 0.05, format="%.2f",
+        lo = c_lo.number_input("Cắt dưới (Hz)", 0.05, 5.0, step=0.05, format="%.2f", key="cf_lo",
                                help="0,5 Hz khử trôi nền; 0,05 Hz giữ nguyên đoạn ST (chuẩn chẩn đoán).")
-        hi_max = float(np.floor(nyq * 0.99 * 10) / 10)
-        hi = c_hi.number_input("Cắt trên (Hz)", 5.0, hi_max, min(40.0, hi_max), 1.0, format="%.1f",
+        hi = c_hi.number_input("Cắt trên (Hz)", 5.0, hi_max, step=1.0, format="%.1f", key="cf_hi",
                                help=f"Phải nhỏ hơn tần số Nyquist = fs/2 = {nyq:g} Hz.")
         if lo >= hi:
             st.error("Tần số cắt dưới phải nhỏ hơn tần số cắt trên.")
             st.stop()
-        nen = st.radio("Khử trôi đường nền bằng", ["Butterworth thông cao", "Wavelet (bỏ thành phần xấp xỉ)"],
+        nen = st.radio("Khử trôi đường nền bằng", DS_NEN, key="cf_nen",
                        help="Wavelet: phân tách tín hiệu, bỏ thành phần tần thấp dưới tần số cắt dưới.")
 
         st.markdown("**Notch điện lưới**")
-        notch = st.checkbox("Bật Notch", True)
+        notch = st.checkbox("Bật Notch", key="cf_notch")
         c_f, c_q = st.columns(2)
-        f_notch = c_f.selectbox("Tần số", [50, 60], disabled=not notch, help="Việt Nam dùng điện lưới 50 Hz.")
-        Q = c_q.number_input("Hệ số Q", 1.0, 100.0, 30.0, 1.0, disabled=not notch,
+        f_notch = c_f.selectbox("Tần số", [50, 60], disabled=not notch, key="cf_fnotch",
+                                help="Việt Nam dùng điện lưới 50 Hz.")
+        Q = c_q.number_input("Hệ số Q", 1.0, 100.0, step=1.0, disabled=not notch, key="cf_Q",
                              help="Q lớn → khấc cắt hẹp, ít ảnh hưởng tín hiệu lân cận.")
-        hai = st.checkbox("Cắt cả hài bậc 2, 3", False, disabled=not notch)
+        hai = st.checkbox("Cắt cả hài bậc 2, 3", disabled=not notch, key="cf_hai")
 
         st.markdown("**Khử nhiễu Wavelet (DWT)**")
-        wl_on = st.checkbox("Bật khử nhiễu wavelet", True)
-        wavelet = st.selectbox("Wavelet mẹ", ["sym8", "sym4", "db4", "db6", "coif3"],
+        wl_on = st.checkbox("Bật khử nhiễu wavelet", key="cf_wl")
+        wavelet = st.selectbox("Wavelet mẹ", DS_WAVELET, key="cf_wavelet",
                                help="sym8 / db4 có hình dạng gần giống phức bộ QRS nên hay dùng cho ECG.")
-        muc = st.slider("Số mức phân tách", 1, 8, 4, disabled=not wl_on,
+        muc = st.slider("Số mức phân tách", 1, 8, disabled=not wl_on, key="cf_muc",
                         help=f"Mức j chứa dải ≈ {fs/2**2:g}–{fs/2:g} Hz ở mức 1, mỗi mức giảm một nửa. "
                              "Mức quá sâu sẽ làm méo QRS.")
         if wl_on and fs / 2 ** (muc + 1) < 5:
             st.warning(f"Mức {muc} chạm tới dải {fs/2**(muc+1):.1f}–{fs/2**muc:.1f} Hz, nơi chứa sóng P và T. "
                        "Ngưỡng hoá ở đây có thể xoá mất P/T; nên giảm số mức.")
-        nguong = st.selectbox("Quy tắc ngưỡng", ["Universal (VisuShrink)", "Bayes (BayesShrink)"],
-                              disabled=not wl_on)
+        nguong = st.selectbox("Quy tắc ngưỡng", DS_NGUONG, disabled=not wl_on, key="cf_nguong")
         c_m, c_t = st.columns(2)
-        mem = c_m.radio("Kiểu ngưỡng", ["Mềm (soft)", "Cứng (hard)"], disabled=not wl_on) == "Mềm (soft)"
-        theo_muc = c_t.radio("Ước lượng nhiễu", ["Theo từng mức", "Một mức chung"],
-                             disabled=not wl_on) == "Theo từng mức"
+        mem = c_m.radio("Kiểu ngưỡng", DS_KIEU_NGUONG, disabled=not wl_on, key="cf_mem") == DS_KIEU_NGUONG[0]
+        theo_muc = c_t.radio("Ước lượng nhiễu", DS_UOC_LUONG, disabled=not wl_on,
+                             key="cf_theomuc") == DS_UOC_LUONG[0]
         cfg = dict(bac=bac, lo=float(lo), hi=float(hi), nen=nen, notch=notch, f_notch=f_notch, Q=float(Q),
                    hai=hai, wl_on=wl_on, wavelet=wavelet, muc=muc, nguong=nguong, mem=mem, theo_muc=theo_muc)
-    chay = st.button("▶ Phân tích", type="primary", use_container_width=True)
+    chay = st.button("▶ Phân tích", type="primary", use_container_width=True) or ss_.pop("tu_chay", False)
 
 ecg_raw = pd.to_numeric(df[col_ecg], errors="coerce").interpolate().bfill().values
 if don_vi.startswith("V"):
@@ -671,6 +702,50 @@ c4.metric("Kênh phân tích", col_ecg)
 
 with st.expander("Xem 10 dòng đầu của dữ liệu"):
     st.dataframe(df.head(10), use_container_width=True)
+
+# ----------------------------------------------------------------------------
+# 5b. ĐỀ XUẤT BỘ LỌC CHO FILE NÀY
+# ----------------------------------------------------------------------------
+khoa_de_xuat = (ten_file, len(ecg_raw), col_ecg, fs, don_vi, doi_tuong, dung_sai)
+if st.session_state.pop("can_de_xuat", False):
+    with st.spinner("Đang phân tích phổ và chạy thử các phương pháp lọc..."):
+        st.session_state.de_xuat = dict(
+            khoa=khoa_de_xuat,
+            kq=de_xuat(ecg_raw, fs, thai_nhi, xu_ly_ecg, PP_TUY_CHINH,
+                       ref=ref, dung_sai_ms=dung_sai or 50))
+dx = st.session_state.get("de_xuat")
+if dx and dx["khoa"] == khoa_de_xuat:
+    kqdx = dx["kq"]
+    tot = next(r for r in kqdx["bang"] if "loi" not in r)
+    with st.expander("🧭 Đề xuất bộ lọc cho file này", expanded=True):
+        st.success(f"**Đề xuất: {tot['ten']}** · điểm {tot['diem']:.1f}/100 · nhịp tim {tot['nhip']:.0f} l/p · "
+                   f"{tot['so_nhip']} nhịp trong {kqdx['doan_s']:.0f} s đầu")
+        tieu_chi = ("F1 so với nhãn chuẩn (80%) + điểm chất lượng (20%)" if kqdx["co_nhan"] else
+                    "chất lượng tín hiệu 35% · nhịp hợp lý 25% · giữ hình dạng sóng 25% · khử nhiễu 15%")
+        st.caption(f"Cách chấm điểm: {tieu_chi}. Đánh giá trên {kqdx['doan_s']:.0f} s đầu của tín hiệu.")
+        hang = []
+        for i, r in enumerate(kqdx["bang"], 1):
+            if "loi" in r:
+                hang.append({"Hạng": i, "Phương pháp": r["ten"], "Điểm": 0, "Nhận xét": nhan_xet_phuong_phap(r)})
+                continue
+            d = {"Hạng": i, "Phương pháp": r["ten"], "Điểm": round(r["diem"], 1),
+                 "Chất lượng (SQI)": round(r["sqi"] * 100), "Nhịp hợp lý (%)": round(r["rr"] * 100),
+                 "Giữ hình dạng (%)": round(r["hinh_dang"] * 100), "Khử nhiễu (%)": round(r["khu_nhieu"] * 100)}
+            if kqdx["co_nhan"]:
+                d["F1 so với nhãn (%)"] = round(r["f1"] * 100, 1)
+            d["Nhịp tim (l/p)"] = round(r["nhip"])
+            d["Nhận xét"] = nhan_xet_phuong_phap(r)
+            hang.append(d)
+        st.dataframe(pd.DataFrame(hang), use_container_width=True, hide_index=True)
+        st.markdown("**Cấu hình tùy chỉnh được sinh riêng cho file này dựa trên phổ tín hiệu:**")
+        for l in kqdx["ly_do"]:
+            st.markdown(f"- {l}")
+        ten_ds = [r["ten"] for r in kqdx["bang"] if "loi" not in r]
+        c_a, c_b = st.columns([3, 2])
+        chon = c_a.selectbox("Phương án áp dụng", ten_ds, index=0, label_visibility="collapsed")
+        r_chon = next(r for r in kqdx["bang"] if r["ten"] == chon)
+        c_b.button("✅ Áp dụng và phân tích", type="primary", use_container_width=True,
+                   on_click=ap_dung_loc, args=(r_chon["method"], r_chon["cfg"]))
 
 if not chay and "kq" not in st.session_state:
     st.info("Bấm **▶ Phân tích** ở thanh bên để bắt đầu.")
