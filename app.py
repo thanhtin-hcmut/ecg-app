@@ -80,13 +80,13 @@ html, body, .stApp, .stMarkdown, p, li, label, h1, h2, h3, h4, input, textarea, 
 @media (max-width: 1000px) { .ecg-patient { grid-template-columns: repeat(2, 1fr); } }
 .ecg-cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin: 4px 0 16px; }
 @media (max-width: 1000px) { .ecg-cards { grid-template-columns: repeat(2, 1fr); } }
-.ecg-card { background: #fff; border: 1px solid #d5dde3; border-left: 5px solid var(--c); border-radius: 10px;
+.ecg-card { background: #fff; border: 1px solid #d5dde3; border-left: 5px solid #0b5c7a; border-radius: 10px;
   padding: 10px 14px 8px; }
 .ecg-card .lbl { color: #5b6b78; font-size: .78rem; font-weight: 500; }
 .ecg-card .val { font-size: 1.7rem; font-weight: 700; color: #1b2733; line-height: 1.25; }
 .ecg-card .val span { font-size: .8rem; font-weight: 500; color: #5b6b78; margin-left: 4px; }
-.ecg-card .tag { font-size: .76rem; font-weight: 600; color: var(--c); }
-.ecg-card .spark { color: var(--c); margin-top: 2px; }
+.ecg-card .tag { font-size: .76rem; font-weight: 600; }
+.ecg-card .spark { margin-top: 2px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -119,9 +119,11 @@ def ve_buoc(hien_tai: int):
 
 
 def the(nhan, gia_tri, don_vi="", tag="", mau="#0b5c7a", spark=""):
-    return (f'<div class="ecg-card" style="--c:{mau}"><div class="lbl">{html.escape(nhan)}</div>'
+    # màu ghi thẳng vào style (bộ lọc HTML của Streamlit bỏ biến CSS --c trong style)
+    return (f'<div class="ecg-card" style="border-left-color:{mau}"><div class="lbl">{html.escape(nhan)}</div>'
             f'<div class="val">{gia_tri}<span>{html.escape(don_vi)}</span></div>'
-            f'<div class="tag">{html.escape(tag)}</div><div class="spark">{spark}</div></div>')
+            f'<div class="tag" style="color:{mau}">{html.escape(tag)}</div>'
+            f'<div class="spark" style="color:{mau}">{spark}</div></div>')
 
 
 MAU_TIN_CAY = {"Tốt": "#2e7d32", "Trung bình": "#ef8f00", "Kém": "#c62828"}

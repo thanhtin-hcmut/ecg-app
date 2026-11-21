@@ -243,6 +243,7 @@ def _logo(fig, x, y, s):
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
     ax.axis("off")
+    ax.set_zorder(5)                     # vẽ đè lên dải màu đầu phiếu
 
 
 def tao_pdf(tt: dict, kpi: list, dong_ss: list, luu_y: list, strip: dict, figs: list,
@@ -268,7 +269,7 @@ def tao_pdf(tt: dict, kpi: list, dong_ss: list, luu_y: list, strip: dict, figs: 
 
         # --- Thông tin hành chính (2 cột)
         y0 = 0.885
-        fig.add_artist(Rectangle((0.05, y0 - 0.088), 0.90, 0.088, transform=fig.transFigure, fc="#f4f7f9",
+        fig.add_artist(Rectangle((0.05, y0 - 0.094), 0.90, 0.094, transform=fig.transFigure, fc="#f4f7f9",
                                  ec="#d5dde3", lw=0.8))
         muc = [(k, v) for k, v in tt.items() if not k.startswith("_")]
         nua = (len(muc) + 1) // 2
@@ -289,12 +290,12 @@ def tao_pdf(tt: dict, kpi: list, dong_ss: list, luu_y: list, strip: dict, figs: 
             fig.add_artist(FancyBboxPatch((x, yk), wk, hk, transform=fig.transFigure, fc="white", ec="#d5dde3",
                                           lw=0.8, boxstyle="round,pad=0,rounding_size=0.006"))
             fig.add_artist(Rectangle((x, yk), 0.005, hk, transform=fig.transFigure, fc=mau, ec="none"))
-            fig.text(x + 0.014, yk + hk - 0.016, nhan, fontsize=7.6, color=XAM)
-            fig.text(x + 0.014, yk + 0.02, gt, fontsize=15, weight="bold", color="#1b2733")
-            fig.text(x + wk - 0.01, yk + 0.022, dv, fontsize=7.6, color=XAM, ha="right")
-            if tt_:
-                fig.text(x + wk - 0.01, yk + hk - 0.016, t(tt_), fontsize=7.4, color=mau, ha="right",
-                         weight="bold")
+            fig.text(x + 0.014, yk + hk - 0.015, textwrap.shorten(nhan, 24, placeholder="…"), fontsize=7.6,
+                     color=XAM)
+            if tt_:                              # trạng thái nằm dưới nhãn để không đè chữ khi ô hẹp
+                fig.text(x + 0.014, yk + hk - 0.029, t(tt_), fontsize=7.4, color=mau, weight="bold")
+            fig.text(x + 0.014, yk + 0.011, gt, fontsize=15, weight="bold", color="#1b2733")
+            fig.text(x + wk - 0.01, yk + 0.013, dv, fontsize=7.6, color=XAM, ha="right")
 
         # --- Dải sóng 10 s
         fig.text(0.05, 0.69, t("DẢI SÓNG ĐIỆN TIM 10 GIÂY"), fontsize=9.5, weight="bold", color=XANH)
