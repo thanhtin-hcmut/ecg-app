@@ -14,6 +14,12 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from doc_physionet import doc_edf, doc_nhan_wfdb, doc_wfdb
+
 # ----------------------------------------------------------------------------
 # Cấu hình trang
 # ----------------------------------------------------------------------------
@@ -53,6 +59,73 @@ def doc_file(file) -> pd.DataFrame:
         if df[c].dtype == object:
             df[c] = pd.to_numeric(df[c].astype(str).str.replace(",", "."), errors="coerce")
     return df.dropna(axis=1, how="all")
+
+
+DUOI_NHAN = ("atr", "qrs", "ann")
+
+
+def doc_nhieu_file(files) -> tuple[pd.DataFrame, dict]:
+    """Đọc 1 hoặc nhiều file: CSV/TXT, EDF/EDF+ (.edf), WFDB (.hea + .dat) và nhãn WFDB (.atr/.qrs/.ann).
+    Trả về (bảng tín hiệu, thông tin: fs, đơn vị từng kênh, vị trí đỉnh R chuẩn nếu có, mô tả định dạng)."""
+    duoi = lambda f: f.name.lower().rsplit(".", 1)[-1]
+    edf = [f for f in files if duoi(f) == "edf"]
+    hea = [f for f in files if duoi(f) == "hea"]
+    nhan = [f for f in files if duoi(f) in DUOI_NHAN]
+    bang = [f for f in files if duoi(f) in ("csv", "txt")]
+    meta = dict(fs=None, units={}, ref=None, ky_hieu=None, mo_ta="", nguon_nhan="")
+
+    if edf:
+        d = doc_edf(edf[0].getvalue())
+        meta["mo_ta"] = f"EDF/EDF+ ({edf[0].name})"
+    elif hea:
+        dat = {f.name: f.getvalue() for f in files if duoi(f) == "dat"}
+        d = doc_wfdb(hea[0].getvalue().decode("latin-1"), dat)
+        meta["mo_ta"] = f"WFDB ({hea[0].name})"
+    elif bang:
+        return doc_file(bang[0]), meta
+    elif any(duoi(f) == "dat" for f in files):
+        raise ValueError("File .dat của PhysioNet cần tải lên kèm file .hea cùng tên.")
+    else:
+        raise ValueError("Chưa có file tín hiệu. Hãy tải .csv/.txt, .edf, hoặc cặp .hea + .dat.")
+
+    if not d["signals"]:
+        raise ValueError("File không có kênh tín hiệu nào.")
+    # chỉ giữ các kênh có cùng tần số lấy mẫu phổ biến nhất
+    fs_ds = list(d["fs"].values())
+    fs = max(set(fs_ds), key=fs_ds.count)
+    ten = [k for k in d["signals"] if d["fs"][k] == fs]
+    n = min(len(d["signals"][k]) for k in ten)
+    df = pd.DataFrame({k: d["signals"][k][:n] for k in ten})
+    meta.update(fs=fs, units={k: d["units"][k] for k in ten})
+
+    if nhan:
+        mau, ky = doc_nhan_wfdb(nhan[0].getvalue())
+        meta.update(ref=mau[mau < n], ky_hieu=ky, nguon_nhan=nhan[0].name)
+    elif d["ann_s"]:
+        mau = np.round(np.asarray(d["ann_s"]) * fs).astype(int)
+        meta.update(ref=mau[(mau >= 0) & (mau < n)], nguon_nhan="nhãn EDF+ trong file")
+    return df, meta
+
+
+def doi_chieu(det, ref, fs, dung_sai_ms):
+    """So khớp đỉnh R tìm được với nhãn chuẩn (mỗi nhãn khớp tối đa 1 đỉnh, trong ± dung sai)."""
+    tol = dung_sai_ms * fs / 1000
+    det = np.sort(np.asarray(det))
+    da_dung = np.zeros(len(det), bool)
+    tp, lech = 0, []
+    for r in np.sort(np.asarray(ref)):
+        j = np.searchsorted(det, r)
+        ung_vien = [k for k in (j - 1, j) if 0 <= k < len(det) and not da_dung[k] and abs(det[k] - r) <= tol]
+        if ung_vien:
+            k = min(ung_vien, key=lambda k: abs(det[k] - r))
+            da_dung[k] = True
+            tp += 1
+            lech.append(abs(det[k] - r) / fs * 1000)
+    fn, fp = len(ref) - tp, len(det) - tp
+    se = tp / (tp + fn) if tp + fn else np.nan
+    ppv = tp / (tp + fp) if tp + fp else np.nan
+    f1 = 2 * se * ppv / (se + ppv) if se + ppv else np.nan
+    return dict(TP=tp, FN=fn, FP=fp, Se=se, PPV=ppv, F1=f1, lech_ms=float(np.mean(lech)) if lech else np.nan)
 
 
 PP_TUY_CHINH = "Tùy chỉnh (Butterworth + Notch + Wavelet)"
@@ -204,15 +277,22 @@ def tinh_hrv(rpeaks, fs):
     }
 
 
-def danh_gia(hr_mean, rr_ms, khoang):
-    """Nhận xét tự động dựa trên ngưỡng tham khảo người lớn khi nghỉ."""
+def nguong_nhip(thai_nhi: bool):
+    """Ngưỡng nhịp tim bình thường: người lớn khi nghỉ 60–100 l/p; thai nhi (FIGO) 110–160 l/p."""
+    return (110, 160) if thai_nhi else (60, 100)
+
+
+def danh_gia(hr_mean, rr_ms, khoang, thai_nhi=False):
+    """Nhận xét tự động dựa trên ngưỡng tham khảo (người lớn khi nghỉ, hoặc thai nhi theo FIGO)."""
     nx = []
-    if hr_mean < 60:
-        nx.append(f"Nhịp tim trung bình {hr_mean:.0f} l/p: chậm hơn ngưỡng 60–100 l/p.")
-    elif hr_mean > 100:
-        nx.append(f"Nhịp tim trung bình {hr_mean:.0f} l/p: nhanh hơn ngưỡng 60–100 l/p.")
+    lo, hi = nguong_nhip(thai_nhi)
+    doi_tuong = "nhịp tim thai" if thai_nhi else "nhịp tim"
+    if hr_mean < lo:
+        nx.append(f"{doi_tuong.capitalize()} trung bình {hr_mean:.0f} l/p: chậm hơn ngưỡng {lo}–{hi} l/p.")
+    elif hr_mean > hi:
+        nx.append(f"{doi_tuong.capitalize()} trung bình {hr_mean:.0f} l/p: nhanh hơn ngưỡng {lo}–{hi} l/p.")
     else:
-        nx.append(f"Nhịp tim trung bình {hr_mean:.0f} l/p: trong ngưỡng 60–100 l/p.")
+        nx.append(f"{doi_tuong.capitalize()} trung bình {hr_mean:.0f} l/p: trong ngưỡng {lo}–{hi} l/p.")
 
     cv = np.std(rr_ms) / np.mean(rr_ms) * 100
     if cv > 15:
@@ -225,6 +305,9 @@ def danh_gia(hr_mean, rr_ms, khoang):
     if n_bat_thuong:
         nx.append(f"Có {n_bat_thuong} nhịp có RR lệch >20% so với nhịp trước (nghi ngoại tâm thu hoặc nhiễu).")
 
+    if thai_nhi:
+        nx.append("Các khoảng PR/QRS/QT của thai nhi không được đánh giá theo ngưỡng người lớn.")
+        return nx
     nguong = {"PR (ms)": (120, 200), "QRS (ms)": (60, 120), "QTc Bazett (ms)": (350, 450)}
     for k, (lo, hi) in nguong.items():
         v = khoang.get(k, np.nan)
@@ -251,24 +334,31 @@ def ve_luoi_ecg(ax, t0, t1, ymin, ymax):
     ax.set_ylim(ymin, ymax)
 
 
-def fig_dai_song(ecg_clean, rpeaks, fs, t_start, dur):
+def fig_dai_song(ecg_clean, rpeaks, fs, t_start, dur, ref=None):
     i0, i1 = int(t_start * fs), int(min((t_start + dur) * fs, len(ecg_clean)))
     t = np.arange(i0, i1) / fs
     seg = ecg_clean[i0:i1]
-    pad = 0.3
+    pad = max(0.15 * (seg.max() - seg.min()), 0.02)
     ymin, ymax = seg.min() - pad, seg.max() + pad
     # 25 mm/s, 10 mm/mV  -> 1 s = 25 mm, 1 mV = 10 mm (tỷ lệ khung hình đúng chuẩn)
     w_in = dur * 25 / 25.4
     h_in = (ymax - ymin) * 10 / 25.4
     scale = min(1.0, 14 / w_in)
+    phong_dai = h_in * scale < 2.2           # tín hiệu biên độ nhỏ (vd. ECG thai nhi) -> phóng to trục dọc
     fig, ax = plt.subplots(figsize=(w_in * scale, max(h_in * scale, 2.2)))
     ve_luoi_ecg(ax, t[0], t[-1], ymin, ymax)
     ax.plot(t, seg, color="black", lw=1)
     rp = rpeaks[(rpeaks >= i0) & (rpeaks < i1)]
     ax.plot(rp / fs, ecg_clean[rp], "o", color="#1f77b4", ms=4)
+    tieu_de = ("Dải sóng ECG (25 mm/s, " + ("biên độ phóng đại" if phong_dai else "10 mm/mV")
+               + ") · chấm xanh: đỉnh R app tìm được")
+    if ref is not None:
+        rf = ref[(ref >= i0) & (ref < i1)]
+        ax.plot(rf / fs, np.full(len(rf), ymax - pad * 0.4), "v", color="#d62728", ms=6)
+        tieu_de += " · tam giác đỏ: nhãn chuẩn"
     ax.set_xlabel("Thời gian (s)")
     ax.set_ylabel("Biên độ (mV)")
-    ax.set_title("Dải sóng ECG (25 mm/s, 10 mm/mV) · chấm xanh: đỉnh R")
+    ax.set_title(tieu_de)
     fig.tight_layout()
     return fig
 
@@ -341,10 +431,10 @@ def fig_dap_ung(fs, cfg):
     return fig
 
 
-def fig_nhip_tim(rpeaks, hr, fs):
+def fig_nhip_tim(rpeaks, hr, fs, band=(60, 100)):
     fig, ax = plt.subplots(figsize=(12, 3))
     ax.plot(rpeaks[1:] / fs, hr, color="crimson", lw=1.2)
-    ax.axhspan(60, 100, color="green", alpha=0.08, label="Ngưỡng 60–100 l/p")
+    ax.axhspan(band[0], band[1], color="green", alpha=0.08, label=f"Ngưỡng {band[0]}–{band[1]} l/p")
     ax.set_xlabel("Thời gian (s)")
     ax.set_ylabel("Nhịp tim (l/p)")
     ax.set_title("Nhịp tim tức thời theo thời gian")
@@ -420,9 +510,13 @@ def fmt(v, nd=1):
 with st.sidebar:
     st.header("1. Dữ liệu")
     nguon = st.radio("Nguồn dữ liệu", ["Dùng dữ liệu mẫu", "Tải file lên"])
-    file = None
+    files = []
     if nguon == "Tải file lên":
-        file = st.file_uploader("File CSV / TXT", type=["csv", "txt"])
+        files = st.file_uploader(
+            "File dữ liệu ECG", type=["csv", "txt", "edf", "hea", "dat"] + list(DUOI_NHAN),
+            accept_multiple_files=True,
+            help="CSV/TXT; EDF/EDF+ (.edf); PhysioNet WFDB: chọn cùng lúc .hea + .dat, "
+                 "có thể kèm file nhãn .atr/.qrs/.ann để đối chiếu đỉnh R.") or []
 
     st.header("2. Thông tin bệnh nhân")
     ten = st.text_input("Họ tên / mã", "Bệnh nhân mẫu")
@@ -437,16 +531,18 @@ if nguon == "Dùng dữ liệu mẫu":
     fs_default = 500
     sig = nk.ecg_simulate(duration=60, sampling_rate=fs_default, heart_rate=75, noise=0.05, random_state=42)
     df = pd.DataFrame({"time_s": np.arange(len(sig)) / fs_default, "ecg_mV": sig})
+    meta = dict(fs=None, units={}, ref=None, ky_hieu=None, mo_ta="", nguon_nhan="")
 else:
-    if file is None:
-        st.info("⬅️ Hãy tải file ECG lên ở thanh bên (CSV/TXT, mỗi cột là một kênh).")
+    if not files:
+        st.info("⬅️ Hãy tải file ECG lên ở thanh bên: CSV/TXT, EDF (.edf), "
+                "hoặc dữ liệu PhysioNet WFDB (.hea + .dat, kèm nhãn .atr/.qrs nếu có).")
         st.stop()
     try:
-        df = doc_file(file)
+        df, meta = doc_nhieu_file(files)
     except Exception as e:
         st.error(f"Không đọc được file: {e}")
         st.stop()
-    fs_default = 500
+    fs_default = int(round(meta["fs"])) if meta["fs"] else 500
 
 with st.sidebar:
     st.header("3. Tín hiệu")
@@ -454,15 +550,21 @@ with st.sidebar:
     if not cols_num:
         st.error("File không có cột số.")
         st.stop()
-    goi_y = [c for c in cols_num if "ecg" in c.lower()] or [cols_num[-1]]
+    la_thoi_gian = lambda c: "time" in c.lower() or c.lower() in ("t", "s")
+    goi_y = ([c for c in cols_num if any(k in c.lower() for k in ("direct", "ecg", "mlii"))]
+             or [c for c in cols_num if not la_thoi_gian(c)] or cols_num)
     col_ecg = st.selectbox("Cột tín hiệu ECG", cols_num, index=cols_num.index(goi_y[0]))
     # Tự ước tính fs nếu có cột thời gian
-    col_time = next((c for c in cols_num if "time" in c.lower() or c.lower() in ("t", "s")), None)
-    if col_time is not None and len(df) > 2:
+    col_time = next((c for c in cols_num if la_thoi_gian(c)), None)
+    if meta["fs"]:
+        col_time = "fs"                     # tần số đã đọc từ file
+    elif col_time is not None and len(df) > 2:
         dt = np.median(np.diff(df[col_time].values[:1000]))
         if dt > 0:
             fs_default = int(round(1 / dt))
     fs = st.number_input("Tần số lấy mẫu (Hz)", 50, 10000, fs_default)
+    if meta["fs"]:
+        st.caption(f"Đọc từ file {meta['mo_ta']}: {meta['fs']:g} Hz, {len(cols_num)} kênh.")
     if col_time is None:
         st.warning("File không có cột thời gian: hãy nhập **đúng tần số lấy mẫu** của thiết bị đo, "
                    "nếu sai thì nhịp tim và mọi khoảng thời gian sẽ sai theo.")
@@ -473,7 +575,23 @@ with st.sidebar:
     ds_don_vi = ["mV", "V (đổi sang mV)", "µV (đổi sang mV)",
                  "ADC 12-bit → mV (giả định AD8232, 3,3 V, khuếch đại 1100)",
                  "ADC thô (chuẩn hoá, không có đơn vị)"]
-    don_vi = st.selectbox("Đơn vị tín hiệu", ds_don_vi, index=3 if la_adc else 0)
+    u = meta["units"].get(col_ecg, "").replace("μ", "u").replace("µ", "u").lower()
+    chi_so_dv = {"uv": 2, "mv": 0, "v": 1}.get(u, 3 if la_adc else 0)
+    don_vi = st.selectbox("Đơn vị tín hiệu", ds_don_vi, index=chi_so_dv,
+                          help=f"Đơn vị ghi trong file: {meta['units'][col_ecg]}" if col_ecg in meta["units"] else None)
+
+    goi_y_thai = any(k in " ".join(cols_num + [f.name for f in files]).lower()
+                     for k in ("direct", "abdomen", "fetal", "fecg", "adfecg"))
+    doi_tuong = st.selectbox("Đối tượng", ["Người lớn", "Thai nhi (FECG)"], index=1 if goi_y_thai else 0,
+                             help="Đổi ngưỡng đánh giá: người lớn 60–100 l/p, thai nhi 110–160 l/p (FIGO).")
+    thai_nhi = doi_tuong.startswith("Thai")
+
+    dung_sai = None
+    if meta["ref"] is not None:
+        st.markdown(f"**Nhãn chuẩn:** {len(meta['ref'])} đỉnh R ({meta['nguon_nhan']})")
+        dung_sai = st.slider("Dung sai khớp đỉnh R (ms)", 10, 150, 50 if thai_nhi else 150, 10,
+                             help="Chuẩn ANSI/AAMI EC57 dùng 150 ms cho người lớn; ECG thai nhi nhịp nhanh "
+                                  "nên thường dùng 50 ms.")
 
     st.header("4. Bộ lọc")
     method = st.selectbox("Phương pháp lọc", ["neurokit", "biosppy", "pantompkins1985", "hamilton2002",
@@ -536,8 +654,9 @@ elif don_vi.startswith("ADC thô"):
     ecg_raw = (ecg_raw - np.median(ecg_raw)) / (np.std(ecg_raw) or 1)
 
 duration = len(ecg_raw) / fs
-ten_file = getattr(file, "name", "du_lieu_mau") if nguon == "Tải file lên" else "du_lieu_mau"
+ten_file = ",".join(sorted(f.name for f in files)) if nguon == "Tải file lên" else "du_lieu_mau"
 khoa_dau_vao = (ten_file, len(ecg_raw), col_ecg, fs, don_vi, method, tuple(sorted((cfg or {}).items())))
+ref = meta["ref"] if meta["ref"] is not None and (not meta["fs"] or fs == fs_default) else None
 if st.session_state.get("khoa") != khoa_dau_vao:   # đổi dữ liệu/tham số -> bỏ kết quả cũ
     st.session_state.pop("kq", None)
 
@@ -577,12 +696,13 @@ kq = st.session_state.kq
 ecg_clean, rpeaks, rr_ms, hr = kq["ecg_clean"], kq["rpeaks"], kq["rr_ms"], kq["hr"]
 khoang, hrv, quality = kq["khoang"], kq["hrv"], kq["quality"]
 hr_mean = 60000 / np.mean(rr_ms)
-nhan_xet = danh_gia(hr_mean, rr_ms, khoang)
+nhan_xet = danh_gia(hr_mean, rr_ms, khoang, thai_nhi)
+dc = doi_chieu(rpeaks, ref, fs, dung_sai) if ref is not None and len(ref) else None
 
 # ----------------------------------------------------------------------------
 # 7. HIỂN THỊ KẾT QUẢ
 # ----------------------------------------------------------------------------
-if not 35 <= hr_mean <= 200:
+if not ((50 <= hr_mean <= 240) if thai_nhi else (35 <= hr_mean <= 200)):
     st.warning(f"Nhịp tim tính ra {hr_mean:.0f} l/p là bất thường về mặt sinh lý. "
                "Nhiều khả năng **tần số lấy mẫu đang nhập chưa đúng**, hãy kiểm tra lại.")
 if don_vi.startswith("ADC 12-bit"):
@@ -596,6 +716,20 @@ m3.metric("Nhịp tim max", f"{hr.max():.0f} l/p")
 m4.metric("Số nhịp", f"{len(rpeaks)}")
 m5.metric("Chất lượng tín hiệu", "—" if not np.isfinite(quality) else f"{quality*100:.0f}%")
 
+if dc is not None:
+    st.subheader("🎯 Đối chiếu với nhãn chuẩn")
+    n1, n2, n3, n4 = st.columns(4)
+    n1.metric("Độ nhạy Se", f"{dc['Se']*100:.1f}%", help="Tỷ lệ nhãn chuẩn được app tìm thấy = TP/(TP+FN)")
+    n2.metric("Giá trị dự báo dương PPV", f"{dc['PPV']*100:.1f}%", help="Tỷ lệ đỉnh app tìm là đúng = TP/(TP+FP)")
+    n3.metric("F1", f"{dc['F1']*100:.1f}%")
+    n4.metric("Lệch thời gian TB", f"{dc['lech_ms']:.1f} ms")
+    st.caption(f"TP = {dc['TP']} · bỏ sót FN = {dc['FN']} · phát hiện thừa FP = {dc['FP']} · "
+               f"dung sai ±{dung_sai} ms · nhãn: {meta['nguon_nhan']}.")
+    if thai_nhi and "abdomen" in col_ecg.lower():
+        st.info("Kênh bụng mẹ (Abdomen) chứa cả ECG của mẹ (biên độ lớn) lẫn của thai nhi, nên thuật toán chủ yếu "
+                "bắt nhịp **mẹ**. Nhãn chuẩn là nhịp **thai**, vì vậy Se/PPV thấp là đúng bản chất tín hiệu. "
+                "Hãy chọn kênh **Direct_1** (điện cực đặt trên đầu thai nhi) để đánh giá thuật toán.")
+
 tab1, tab2, tab3, tab4, tab5 = st.tabs(
     ["📈 Dải sóng ECG", "🧹 Trước/sau lọc", "❤️ Nhịp tim & HRV", "📋 Bảng chỉ số", "📄 Báo cáo"]
 )
@@ -604,7 +738,7 @@ with tab1:
     max_start = max(0.0, duration - 10)
     t_start = st.slider("Bắt đầu từ (s)", 0.0, float(max_start), 0.0, 0.5)
     dur = st.select_slider("Độ dài đoạn hiển thị (s)", [5, 10], value=10)
-    fig_strip = fig_dai_song(ecg_clean, rpeaks, fs, t_start, min(dur, duration))
+    fig_strip = fig_dai_song(ecg_clean, rpeaks, fs, t_start, min(dur, duration), ref)
     st.pyplot(fig_strip)
 
 with tab2:
@@ -621,7 +755,7 @@ with tab2:
                    "đáp ứng tần số cố định, xem hiệu quả của nó trên phổ công suất.")
 
 with tab3:
-    fig_hr = fig_nhip_tim(rpeaks, hr, fs)
+    fig_hr = fig_nhip_tim(rpeaks, hr, fs, nguong_nhip(thai_nhi))
     st.pyplot(fig_hr)
     fig_rr_ = fig_rr(rr_ms)
     st.pyplot(fig_rr_)
@@ -636,6 +770,11 @@ rows = [
 ]
 rows += [(k, fmt(v, 0)) for k, v in khoang.items()]
 rows += [(k, fmt(v, 1)) for k, v in hrv.items()]
+if dc is not None:
+    rows += [("Đối chiếu nhãn chuẩn: Se (%)", fmt(dc["Se"] * 100, 1)),
+             ("Đối chiếu nhãn chuẩn: PPV (%)", fmt(dc["PPV"] * 100, 1)),
+             ("Đối chiếu nhãn chuẩn: F1 (%)", fmt(dc["F1"] * 100, 1)),
+             ("Đối chiếu nhãn chuẩn: TP / FN / FP", f"{dc['TP']} / {dc['FN']} / {dc['FP']}")]
 bang = pd.DataFrame(rows, columns=["Chỉ số", "Giá trị"])
 
 with tab4:
@@ -663,6 +802,7 @@ with tab5:
     thong_tin = {
         "Bệnh nhân": ten, "Tuổi": tuoi, "Giới tính": gioi,
         "Ngày phân tích": datetime.now().strftime("%d/%m/%Y %H:%M"),
+        "Đối tượng": doi_tuong, "Dữ liệu": f"{ten_file} · kênh {col_ecg}",
         "Tần số lấy mẫu": f"{fs} Hz", "Thời lượng ghi": f"{duration:.1f} s",
         "Phương pháp lọc": mo_ta_loc(method, cfg),
     }

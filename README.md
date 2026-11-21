@@ -11,6 +11,9 @@ Mỗi khi code trên nhánh `main` thay đổi, app online tự cập nhật.
 ## Chức năng
 
 - Đọc file CSV/TXT: có hoặc không có dòng tiêu đề, 1 hay nhiều cột, dấu `,` `;` hoặc tab
+- Đọc dữ liệu PhysioNet: **EDF/EDF+** (`.edf`) và **WFDB** (chọn cùng lúc `.hea` + `.dat`, định dạng 16/61/80/212)
+- Đọc nhãn đỉnh R chuẩn (`.atr`, `.qrs`, `.ann` hoặc nhãn EDF+) và **đối chiếu**: độ nhạy Se, PPV, F1
+- Chế độ **thai nhi (FECG)** với ngưỡng nhịp tim 110–160 l/p (FIGO)
 - Đơn vị mV, V, µV, hoặc giá trị ADC 12-bit (tự quy đổi theo giả định AD8232)
 - Bộ lọc: NeuroKit, BioSPPy, Pan-Tompkins, Hamilton, hoặc **Tùy chỉnh**
   (Butterworth chỉnh bậc và tần số cắt, Notch 50/60 Hz, khử trôi nền và khử nhiễu bằng wavelet)
