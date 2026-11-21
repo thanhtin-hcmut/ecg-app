@@ -18,6 +18,7 @@ Mỗi khi code trên nhánh `main` thay đổi, app online tự cập nhật.
 - Bộ lọc: NeuroKit, BioSPPy, Pan-Tompkins, Hamilton, hoặc **Tùy chỉnh**
   (Butterworth chỉnh bậc và tần số cắt, Notch 50/60 Hz, khử trôi nền và khử nhiễu bằng wavelet)
 - **Đề xuất bộ lọc cho từng file**: phân tích phổ (trôi nền, nhiễu 50/60 Hz, nhiễu tần cao) để tự sinh cấu hình lọc riêng, chạy thử mọi phương pháp, chấm điểm (chất lượng tín hiệu, nhịp hợp lý, giữ hình dạng sóng, khử nhiễu; hoặc F1 nếu có nhãn chuẩn) và áp dụng phương án tốt nhất bằng một nút bấm
+- **So sánh với khoảng tham chiếu cho bác sĩ** (AHA/ACCF/HRS, Nunan 2010, FIGO): biểu đồ dạng phiếu xét nghiệm, biểu đồ thác nước **SHAP** cho biết chỉ số nào đóng góp vào mức lệch, độ tin cậy từng phép đo — không đưa ra chẩn đoán
 - Tìm đỉnh R, nhịp tim, PR, QRS, QT, QTc (Bazett, Fridericia), HRV (SDNN, RMSSD, pNN50, SD1/SD2)
 - Dải sóng trên lưới giấy điện tim chuẩn (25 mm/s, 10 mm/mV), phổ công suất, đáp ứng tần số bộ lọc
 - Xuất bảng chỉ số (CSV) và báo cáo PDF

@@ -19,6 +19,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from de_xuat_loc import de_xuat, nhan_xet_phuong_phap
+from so_sanh_chi_so import (bien_thien_nhip_thai, danh_gia_chi_so, diem_luu_y, fig_khoang_tham_chieu,
+                            fig_shap, khoang_str, so)
 from doc_physionet import doc_edf, doc_nhan_wfdb, doc_wfdb
 
 # ----------------------------------------------------------------------------
@@ -486,8 +488,8 @@ def fig_rr(rr_ms):
     return fig
 
 
-def tao_pdf(thong_tin, bang_chi_so, nhan_xet, figs):
-    """Báo cáo PDF: trang 1 là thông tin + chỉ số + nhận xét, các trang sau là biểu đồ."""
+def tao_pdf(thong_tin, bang_chi_so, nhan_xet, figs, tieu_de_nx="CÁC ĐIỂM CẦN BÁC SĨ LƯU Ý"):
+    """Báo cáo PDF: trang 1 là thông tin + bảng so sánh chỉ số + điểm lưu ý, các trang sau là biểu đồ."""
     buf = io.BytesIO()
     with PdfPages(buf) as pdf:
         fig = plt.figure(figsize=(8.27, 11.69))  # A4
@@ -500,18 +502,26 @@ def tao_pdf(thong_tin, bang_chi_so, nhan_xet, figs):
                 fig.text(0.08 if i == 0 else 0.10, y, dong, fontsize=10)
                 y -= 0.022
         y -= 0.02
-        fig.text(0.08, y, "CHỈ SỐ ĐO", fontsize=12, weight="bold")
+        fig.text(0.08, y, "SO SÁNH CHỈ SỐ VỚI KHOẢNG THAM CHIẾU", fontsize=12, weight="bold")
         y -= 0.03
+        cot = list(bang_chi_so.columns)
+        x_cot = np.linspace(0.08, 0.92, len(cot) + 1)[:-1]
+        for xc, c in zip(x_cot, cot):
+            fig.text(xc, y, c, fontsize=8.5, weight="bold")
+        y -= 0.022
         for _, r in bang_chi_so.iterrows():
-            fig.text(0.10, y, f"{r['Chỉ số']}", fontsize=10)
-            fig.text(0.55, y, f"{r['Giá trị']}", fontsize=10)
-            y -= 0.022
+            for xc, c in zip(x_cot, cot):
+                mau = {"Cao": "#c62828", "Thấp": "#1565c0"}.get(str(r[c]), "black") if c == "Đánh giá" else "black"
+                fig.text(xc, y, str(r[c])[:24], fontsize=8.5, color=mau)
+            y -= 0.02
         y -= 0.02
-        fig.text(0.08, y, "NHẬN XÉT TỰ ĐỘNG (cần bác sĩ xác nhận)", fontsize=12, weight="bold")
+        fig.text(0.08, y, tieu_de_nx, fontsize=12, weight="bold")
         y -= 0.03
-        for line in nhan_xet:
-            fig.text(0.10, y, "• " + line, fontsize=9, wrap=True)
-            y -= 0.025
+        for line in nhan_xet or ["Tất cả chỉ số đánh giá được đều nằm trong khoảng tham chiếu."]:
+            for i, d in enumerate(textwrap.wrap(line, 105)):
+                fig.text(0.10 if i == 0 else 0.115, y, ("• " if i == 0 else "") + d, fontsize=9)
+                y -= 0.02
+            y -= 0.004
         y -= 0.03
         fig.text(0.08, y, "Kết luận của bác sĩ: ...........................................................", fontsize=10)
         fig.text(0.08, 0.04, "Kết quả tự động chỉ dùng cho học tập/nghiên cứu, không thay thế chẩn đoán y khoa.",
@@ -806,7 +816,7 @@ if dc is not None:
                 "Hãy chọn kênh **Direct_1** (điện cực đặt trên đầu thai nhi) để đánh giá thuật toán.")
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs(
-    ["📈 Dải sóng ECG", "🧹 Trước/sau lọc", "❤️ Nhịp tim & HRV", "📋 Bảng chỉ số", "📄 Báo cáo"]
+    ["📈 Dải sóng ECG", "🧹 Trước/sau lọc", "❤️ Nhịp tim & HRV", "🩺 So sánh chỉ số", "📄 Báo cáo"]
 )
 
 with tab1:
@@ -852,11 +862,71 @@ if dc is not None:
              ("Đối chiếu nhãn chuẩn: TP / FN / FP", f"{dc['TP']} / {dc['FN']} / {dc['FP']}")]
 bang = pd.DataFrame(rows, columns=["Chỉ số", "Giá trị"])
 
+# ---- So sánh với khoảng tham chiếu (giải thích kiểu SHAP) ----
+ty_le_lech = float(np.mean(np.abs(np.diff(rr_ms)) / rr_ms[:-1] > 0.2)) if len(rr_ms) > 2 else 0.0
+if thai_nhi:
+    gia_tri = {"Nhịp tim thai cơ bản": float(np.median(hr)),
+               "Biến thiên nhịp tim thai": bien_thien_nhip_thai(rpeaks, fs)}
+else:
+    gia_tri = {"Nhịp tim": hr_mean, "PR": khoang.get("PR (ms)", np.nan), "QRS": khoang.get("QRS (ms)", np.nan),
+               "QTc (Bazett)": khoang.get("QTc Bazett (ms)", np.nan),
+               "SDNN": hrv.get("SDNN (ms)", np.nan), "RMSSD": hrv.get("RMSSD (ms)", np.nan)}
+dong_ss = danh_gia_chi_so(gia_tri, thai_nhi, gioi, quality, duration, ty_le_lech)
+luu_y = diem_luu_y(dong_ss)
+bang_ss = pd.DataFrame([{
+    "Chỉ số": r["ten"], "Giá trị": "—" if not np.isfinite(r["x"]) else f"{so(r['x'])} {r['dv']}",
+    "Khoảng tham chiếu": khoang_str(r), "Đánh giá": r["trang_thai"], "Độ tin cậy đo": r["tin_cay"],
+    "Đóng góp SHAP": round(r["phi"], 2), "Nguồn tham chiếu": r["nguon"]} for r in dong_ss])
+
 with tab4:
-    st.dataframe(bang, use_container_width=True, hide_index=True)
-    st.markdown("**Nhận xét tự động** (chỉ mang tính tham khảo):")
-    for line in nhan_xet:
-        st.markdown(f"- {line}")
+    st.info("Phần này **không đưa ra chẩn đoán**. Mỗi chỉ số được đặt cạnh khoảng tham chiếu đã công bố "
+            "để bác sĩ đánh giá nhanh; kết luận lâm sàng thuộc về bác sĩ.", icon="🩺")
+    n_ngoai = sum(r["trang_thai"] in ("Cao", "Thấp") for r in dong_ss)
+    n_danh_gia = sum(r["trang_thai"] != "Không đánh giá" for r in dong_ss)
+    k1, k2, k3 = st.columns(3)
+    k1.metric("Chỉ số trong khoảng tham chiếu", f"{n_danh_gia - n_ngoai}/{n_danh_gia}")
+    k2.metric("Chỉ số ngoài khoảng", n_ngoai)
+    k3.metric("Điểm lệch tổng hợp", f"{sum(r['phi'] for r in dong_ss):.2f}",
+              help="0 = mọi chỉ số nằm trong khoảng tham chiếu. Không phải điểm nguy cơ.")
+
+    fig_ref = fig_khoang_tham_chieu(dong_ss)
+    st.pyplot(fig_ref)
+
+    st.markdown("**Chỉ số nào đóng góp vào mức lệch?** (biểu đồ thác nước kiểu SHAP)")
+    fig_shap_ = fig_shap(dong_ss)
+    st.pyplot(fig_shap_)
+    with st.expander("Cách đọc biểu đồ SHAP và độ tin cậy"):
+        st.markdown(
+            "- Biểu đồ bắt đầu từ **giá trị nền 0**, nghĩa là mọi chỉ số nằm trong khoảng tham chiếu. Mỗi thanh "
+            "là phần đóng góp của một chỉ số; cộng dồn lại ra **điểm lệch tổng hợp**.\n"
+            "- Đóng góp = mức lệch chuẩn hoá ra ngoài khoảng (1 = lệch thêm một đoạn bằng độ rộng khoảng, tối đa 2) "
+            "× hệ số độ tin cậy của phép đo (Tốt 1,0 · Trung bình 0,7 · Kém 0,4). Các chỉ số có trọng số bằng nhau.\n"
+            "- Vì điểm lệch là tổng của từng chỉ số (mô hình cộng tính), giá trị SHAP của mỗi chỉ số **đúng bằng** "
+            "phần đóng góp của nó, không phải ước lượng như khi giải thích mô hình học máy hộp đen.\n"
+            "- **Độ tin cậy đo** dựa trên chất lượng tín hiệu (SQI). Các khoảng PR/QRS/QTc đo từ hình thái sóng nên "
+            "được hạ một bậc. HRV cần bản ghi ≥ 5 phút và ít nhịp lệch.\n"
+            "- Đỏ = cao hơn khoảng tham chiếu, xanh dương = thấp hơn, xám = trong khoảng.")
+
+    st.markdown("**Bảng so sánh**")
+    to_mau = lambda v: {"Cao": "color:#c62828;font-weight:600", "Thấp": "color:#1565c0;font-weight:600",
+                        "Bình thường": "color:#2e7d32"}.get(v, "")
+    try:
+        sty = bang_ss.style.map(to_mau, subset=["Đánh giá"])
+    except AttributeError:
+        sty = bang_ss.style.applymap(to_mau, subset=["Đánh giá"])
+    st.dataframe(sty, use_container_width=True, hide_index=True)
+
+    st.markdown("**Các điểm cần bác sĩ lưu ý**")
+    if luu_y:
+        for l in luu_y:
+            st.markdown(f"- {l}")
+    else:
+        st.markdown("- Tất cả chỉ số đánh giá được đều nằm trong khoảng tham chiếu.")
+    if thai_nhi:
+        st.caption("Bản ghi thai nhi: chỉ so sánh nhịp tim thai cơ bản và biến thiên theo FIGO; "
+                   "không đánh giá PR/QRS/QT theo ngưỡng người lớn.")
+    elif tuoi < 18:
+        st.caption("Khoảng tham chiếu đang dùng là của người lớn; trẻ em có ngưỡng khác theo lứa tuổi.")
 
     df_beats = pd.DataFrame({
         "Nhịp số": np.arange(1, len(rr_ms) + 1),
@@ -864,13 +934,15 @@ with tab4:
         "RR (ms)": np.round(rr_ms, 1),
         "Nhịp tim (l/p)": np.round(hr, 1),
     })
-    with st.expander("Bảng từng nhịp"):
-        st.dataframe(df_beats, use_container_width=True, hide_index=True)
-
-    d1, d2 = st.columns(2)
-    d1.download_button("⬇ Tải bảng chỉ số (CSV)", bang.to_csv(index=False).encode("utf-8-sig"),
+    with st.expander("Số liệu đo chi tiết"):
+        st.dataframe(bang, use_container_width=True, hide_index=True)
+        st.dataframe(df_beats, use_container_width=True, hide_index=True, height=250)
+    d1, d2, d3 = st.columns(3)
+    d1.download_button("⬇ Bảng so sánh (CSV)", bang_ss.to_csv(index=False).encode("utf-8-sig"),
+                       "so_sanh_chi_so.csv", "text/csv", use_container_width=True)
+    d2.download_button("⬇ Số liệu đo (CSV)", bang.to_csv(index=False).encode("utf-8-sig"),
                        "chi_so_ecg.csv", "text/csv", use_container_width=True)
-    d2.download_button("⬇ Tải bảng từng nhịp (CSV)", df_beats.to_csv(index=False).encode("utf-8-sig"),
+    d3.download_button("⬇ Từng nhịp (CSV)", df_beats.to_csv(index=False).encode("utf-8-sig"),
                        "tung_nhip_ecg.csv", "text/csv", use_container_width=True)
 
 with tab5:
@@ -881,9 +953,11 @@ with tab5:
         "Tần số lấy mẫu": f"{fs} Hz", "Thời lượng ghi": f"{duration:.1f} s",
         "Phương pháp lọc": mo_ta_loc(method, cfg),
     }
-    st.write("Báo cáo gồm thông tin bệnh nhân, bảng chỉ số, nhận xét tự động, dải sóng ECG và các biểu đồ.")
-    figs_pdf = [fig_strip, fig_loc, fig_pho_] + ([fig_dap_ung_] if fig_dap_ung_ is not None else []) + [fig_hr, fig_rr_]
-    pdf = tao_pdf(thong_tin, bang, nhan_xet, figs_pdf)
+    st.write("Báo cáo gồm thông tin bệnh nhân, bảng so sánh với khoảng tham chiếu, các điểm cần lưu ý, "
+             "biểu đồ SHAP, dải sóng ECG và các biểu đồ khác. Có ô trống để bác sĩ ghi kết luận.")
+    figs_pdf = [fig_ref, fig_shap_, fig_strip, fig_loc, fig_pho_] + ([fig_dap_ung_] if fig_dap_ung_ is not None else []) + [fig_hr, fig_rr_]
+    bang_pdf = bang_ss[["Chỉ số", "Giá trị", "Khoảng tham chiếu", "Đánh giá", "Độ tin cậy đo"]]
+    pdf = tao_pdf(thong_tin, bang_pdf, luu_y, figs_pdf)
     st.download_button("⬇ Tải báo cáo PDF", pdf, f"bao_cao_ecg_{ten.replace(' ', '_')}.pdf",
                        "application/pdf", type="primary", use_container_width=True)
 
